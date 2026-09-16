@@ -122,6 +122,8 @@ class StateMachineTransformer:
         for st in stmts:
             if isinstance(st, LocalAssignStat):
                 names.extend(st.names)
+            elif isinstance(st, LocalFunctionStat):
+                names.append(st.name)
         return names
 
     def _eligible(self, block: Block) -> bool:
@@ -189,6 +191,17 @@ class StateMachineTransformer:
                     values.append(NilLit(line=getattr(st, 'line', 0)))
                 arm_stmts_map[idx] = AssignStat(
                     line=getattr(st, 'line', 0), targets=targets, values=values
+                )
+            elif isinstance(st, LocalFunctionStat):
+                # local function f -> hoist `local f` + в ветке `f = function...`
+                # (иначе область имени сузится до ветки и вызовы из соседних
+                #  веток/внешнего кода потеряют функцию)
+                if st.name not in hoisted:
+                    hoisted.append(st.name)
+                arm_stmts_map[idx] = AssignStat(
+                    line=getattr(st, 'line', 0),
+                    targets=[NameExpr(line=getattr(st, 'line', 0), name=st.name)],
+                    values=[st.func],
                 )
             else:
                 arm_stmts_map[idx] = st

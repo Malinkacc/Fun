@@ -20,7 +20,8 @@ build-id, dead string_decryptor.
 import re
 from obfuscator.deobfuscator.core.base import (
     NodeVisitor, Chunk, Block,
-    LocalAssignStat, AssignStat, IfStat, WhileStat, DoBlockStat,
+    LocalAssignStat, AssignStat, IfStat, WhileStat, RepeatStat, DoBlockStat,
+    BinaryOp,
     LocalFunctionStat, FunctionDeclStat, CallStat, CallExpr,
     NameExpr, NumberLit, StringLit, BoolLit, NilLit, UnaryOp,
     FunctionExpr, IndexExpr,
@@ -50,7 +51,7 @@ class NZLWrapperStripper(BaseDecoder):
     # Регексы для распознавания обфусцированных имён
     OBF_NAME_PATTERNS = [
         re.compile(r'^_0x[0-9A-F]+_[a-zA-Z0-9]+$'),   # _0x4F2_IlII0l0
-        re.compile(r'^[Il0O1o]{8,}$'),                # I0001IOIo, llII0III
+        re.compile(r'^[Il0O1o]{6,}$'),                # I0001IOIo, IOOllIl
     ]
     
     def is_obf_name(self, name: str) -> bool:
@@ -69,36 +70,94 @@ class NZLWrapperStripper(BaseDecoder):
         antitamper_names = self._find_antitamper_names(chunk)
         
         new_stmts = []
-        for stat in chunk.body.statements:
+        stmts = list(chunk.body.statements)
+        i = 0
+        while i < len(stmts):
+            stat = stmts[i]
             self.stats.scanned += 1
+            nxt = stmts[i + 1] if i + 1 < len(stmts) else None
+
+            # 2.5) env-probe пара: local _0x = <probe> + if ... then hang end
+            if self._is_env_probe_pair(stat, nxt):
+                self.stats.replaced += 2
+                self.stats.details.append(f"removed: env-probe pair ({stat.names[0]})")
+                i += 2
+                continue
             
             # 1) `local _nzl = <NUMBER>` — build ID
             if self._is_nzl_build_id(stat):
                 self.stats.replaced += 1
                 self.stats.details.append("removed: local _nzl = <build_id>")
+                i += 1
                 continue
             
             # 2) `local _0xXXX_YYY = pcall(function() env-checks end)` — anti-tamper init
             if self._is_antitamper_pcall(stat):
                 self.stats.replaced += 1
                 self.stats.details.append(f"removed: anti-tamper pcall ({stat.names[0]})")
+                i += 1
                 continue
             
             # 3) `if not _0xXXX_YYY then while true do end end` — anti-tamper crasher
             if self._is_antitamper_crasher(stat, antitamper_names):
                 self.stats.replaced += 1
                 self.stats.details.append("removed: anti-tamper crasher (if not ... while true)")
+                i += 1
                 continue
             
             # 4) Мёртвая обфусцированная local function (0 использований)
             if self._is_dead_obf_function(stat, counter.counts):
                 self.stats.replaced += 1
                 self.stats.details.append(f"removed dead function: {stat.name}")
+                i += 1
                 continue
             
             new_stmts.append(stat)
-        
-        chunk.body.statements = new_stmts
+            i += 1
+
+        # второй проход: висячие hang-if (их local уже снят) и мёртвые probe-local'и
+        defined = set()
+        for stat in new_stmts:
+            if isinstance(stat, LocalAssignStat):
+                defined.update(stat.names)
+        counter2 = _NameUsageCounter()
+        for stat in new_stmts:
+            counter2.visit(stat)
+        final = []
+        for stat in new_stmts:
+            if self._is_dangling_hang_if(stat, defined):
+                self.stats.replaced += 1
+                self.stats.details.append("removed: dangling hang-if")
+                continue
+            if self._is_literal_hang_if(stat):
+                self.stats.replaced += 1
+                self.stats.details.append("removed: opaque hang-if (literal cond)")
+                continue
+            final.append(stat)
+
+        # pass 3: мёртвые probe-local'и (их hang-if уже снят -> использований 0)
+        counter3 = _NameUsageCounter()
+        for stat in final:
+            counter3.visit(stat)
+        final2 = []
+        for stat in final:
+            if (
+                isinstance(stat, LocalAssignStat)
+                and len(stat.names) == 1
+                and self.is_obf_name(stat.names[0])
+                and counter3.counts.get(stat.names[0], 0) == 0
+                and stat.values
+                and all(
+                    self._value_is_literal_or_env(v) and self._value_has_no_call(v)
+                    for v in stat.values
+                )
+            ):
+                self.stats.replaced += 1
+                self.stats.details.append(f"removed: dead probe local ({stat.names[0]})")
+                continue
+            final2.append(stat)
+
+        chunk.body.statements = final2
         return chunk, self.stats
     
     # ==================== ДЕТЕКТОРЫ ====================
@@ -161,6 +220,171 @@ class NZLWrapperStripper(BaseDecoder):
         walk(body)
         return len(found) >= 2
     
+    # ==================== ENV-PROBE ПАРЫ (Sprint 3.5 fix) ====================
+    # protection/environment генерирует не только pcall-блок, но и отдельные
+    # пары верхнего уровня:
+    #     local _0xAAA_BBB = task and task.wait
+    #     if type(_0xAAA_BBB) ~= "function" then <hang: while/repeat> end
+    # Формы hang рандомизированы по seed: while true / while 1 / repeat until
+    # false — старые детекторы знали только pcall+crasher, из-за чего на
+    # части seed'ов пары переживали pipeline и вешали LuaSandbox/Roblox-less
+    # окружения. Снимаем их структурно.
+
+    ENV_PROBE_ROOTS = {'task', 'game', 'Enum', 'workspace', 'identifyexecutor',
+                       'gethui', 'script', 'string', 'table', 'bit32', 'os'}
+
+    @staticmethod
+    def _is_hang_loop(stat) -> bool:
+        """while true/1 do end | repeat until false"""
+        if isinstance(stat, WhileStat):
+            c = stat.cond
+            if isinstance(c, BoolLit) and c.value is True:
+                return True
+            if isinstance(c, NumberLit) and c.value == 1:
+                return True
+            if isinstance(c, BinaryOp) and isinstance(c.left, NumberLit) \
+                    and isinstance(c.right, NumberLit) and c.left.value == c.right.value:
+                return True
+            return False
+        if isinstance(stat, RepeatStat):
+            c = stat.cond
+            return isinstance(c, BoolLit) and c.value is False
+        return False
+
+    def _names_in(self, node, acc: set) -> None:
+        if isinstance(node, NameExpr):
+            acc.add(node.name)
+            return
+        if node is None or not hasattr(node, '__dataclass_fields__'):
+            return
+        from dataclasses import fields as dc_fields
+        for f in dc_fields(node):
+            v = getattr(node, f.name, None)
+            if isinstance(v, (list, tuple)):
+                for it in v:
+                    if isinstance(it, tuple):
+                        for sub in it:
+                            self._names_in(sub, acc)
+                    else:
+                        self._names_in(it, acc)
+            else:
+                self._names_in(v, acc)
+
+    def _block_is_hang(self, block) -> bool:
+        """[hang] | [if true then <hang> end] (формы protection рандомизированы)"""
+        stmts = getattr(block, 'statements', None) or []
+        if len(stmts) != 1:
+            return False
+        st = stmts[0]
+        if self._is_hang_loop(st):
+            return True
+        if isinstance(st, IfStat) and len(st.branches) == 1:
+            cond, inner = st.branches[0]
+            truthy = (isinstance(cond, BoolLit) and cond.value is True) or \
+                     (isinstance(cond, NumberLit) and cond.value not in (0, 0.0))
+            return bool(truthy) and self._block_is_hang(inner)
+        return False
+
+    def _is_hang_if_on(self, stat, name: str) -> bool:
+        """if <cond с именем name> then <hang> end"""
+        if not isinstance(stat, IfStat) or len(stat.branches) != 1:
+            return False
+        cond, block = stat.branches[0]
+        acc: set = set()
+        self._names_in(cond, acc)
+        if name not in acc:
+            return False
+        return self._block_is_hang(block)
+
+    def _is_env_probe_pair(self, stat, nxt) -> bool:
+        if not isinstance(stat, LocalAssignStat) or len(stat.names) != 1:
+            return False
+        name = stat.names[0]
+        if not self.is_obf_name(name):
+            return False
+        acc: set = set()
+        for v in stat.values:
+            self._names_in(v, acc)
+        if not (acc & self.ENV_PROBE_ROOTS):
+            return False
+        return nxt is not None and self._is_hang_if_on(nxt, name)
+
+    def _is_dangling_hang_if(self, stat, defined: set) -> bool:
+        """if type(_0xMISSING) ~= ... then hang end — определение уже снято"""
+        if not isinstance(stat, IfStat) or len(stat.branches) != 1:
+            return False
+        cond, block = stat.branches[0]
+        if not self._block_is_hang(block):
+            return False
+        acc: set = set()
+        self._names_in(cond, acc)
+        obf_refs = [n for n in acc if self.is_obf_name(n)]
+        return bool(obf_refs) and all(n not in defined for n in obf_refs)
+
+    def _cond_meaningful_names(self, node, acc: set) -> None:
+        """Имена в условии, КРОМЕ функций вызова (type/pcall/...) и env-корней."""
+        if isinstance(node, NameExpr):
+            if node.name not in self.ENV_PROBE_ROOTS and node.name not in ('type',):
+                acc.add(node.name)
+            return
+        if isinstance(node, CallExpr):
+            for a in node.args or []:
+                self._cond_meaningful_names(a, acc)
+            return
+        if node is None or not hasattr(node, '__dataclass_fields__'):
+            return
+        from dataclasses import fields as dc_fields
+        for f in dc_fields(node):
+            v = getattr(node, f.name, None)
+            if isinstance(v, (list, tuple)):
+                for it in v:
+                    if isinstance(it, tuple):
+                        for sub in it:
+                            self._cond_meaningful_names(sub, acc)
+                    else:
+                        self._cond_meaningful_names(it, acc)
+            else:
+                self._cond_meaningful_names(v, acc)
+
+    def _is_literal_hang_if(self, stat) -> bool:
+        """if <cond без значимых имён: type(773)=="number", false, ...> then hang end"""
+        if not isinstance(stat, IfStat) or len(stat.branches) != 1:
+            return False
+        cond, block = stat.branches[0]
+        acc: set = set()
+        self._cond_meaningful_names(cond, acc)
+        if acc:
+            return False
+        return self._block_is_hang(block)
+
+    @staticmethod
+    def _value_is_literal_or_env(node) -> bool:
+        if isinstance(node, (NumberLit, StringLit, BoolLit, NilLit)):
+            return True
+        if isinstance(node, NameExpr):
+            return node.name in NZLWrapperStripper.ENV_PROBE_ROOTS
+        return False
+
+    @staticmethod
+    def _value_has_no_call(node) -> bool:
+        if isinstance(node, CallExpr):
+            return False
+        if node is None or not hasattr(node, '__dataclass_fields__'):
+            return True
+        from dataclasses import fields as dc_fields
+        for f in dc_fields(node):
+            v = getattr(node, f.name, None)
+            if isinstance(v, (list, tuple)):
+                for it in v:
+                    if isinstance(it, tuple):
+                        if not all(NZLWrapperStripper._value_has_no_call(s) for s in it):
+                            return False
+                    elif not NZLWrapperStripper._value_has_no_call(it):
+                        return False
+            elif not NZLWrapperStripper._value_has_no_call(v):
+                return False
+        return True
+
     def _find_antitamper_names(self, chunk: Chunk) -> set[str]:
         """Собирает имена локалов, которые ЯВНО anti-tamper (по pcall+env-check)."""
         names = set()

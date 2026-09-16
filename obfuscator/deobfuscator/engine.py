@@ -26,6 +26,7 @@ from obfuscator.deobfuscator.decoders.sandbox_decoder import SandboxDecoder
 from obfuscator.deobfuscator.decoders.number_expr_decoder import NumberExprDecoder
 from obfuscator.deobfuscator.decoders.string_array_decoder import StringArrayDecoder
 from obfuscator.deobfuscator.decoders.state_machine_unflattener import StateMachineUnflattener
+from obfuscator.deobfuscator.decoders.name_normalizer import NameNormalizer
 from obfuscator.deobfuscator.decoders.base_decoder import DecoderStats
 
 
@@ -174,6 +175,7 @@ class DeobfuscatorEngine:
             stages.append(("string.char fold #2", StringCharDecoder()))
             stages.append(("nzl wrapper strip", NZLWrapperStripper()))
             stages.append(("constant fold #3", ConstantFoldDecoder()))
+            stages.append(("name normalize", NameNormalizer()))
         
         if self.level == "vm":
             pass  # TODO: vm_devirtualizer

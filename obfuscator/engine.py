@@ -57,6 +57,7 @@ LEVELS = ('medium', 'hard', 'insane')
 DEFAULT_MEDIUM_CONFIG = {
     'string_array': True,
     'state_machine': True,
+    'name_style': 'luraph',
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -71,6 +72,7 @@ DEFAULT_MEDIUM_CONFIG = {
 DEFAULT_HARD_CONFIG = {
     'string_array': True,
     'state_machine': True,
+    'name_style': 'luraph',
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -86,6 +88,7 @@ DEFAULT_HARD_CONFIG = {
 DEFAULT_INSANE_CONFIG = {
     'string_array': True,
     'state_machine': True,
+    'name_style': 'luraph',
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -261,6 +264,7 @@ class Obfuscator:
                 self._log(f"⚠️  NumberObfuscator пропущен: {e}")
 
         # ⚡ Variables ДО ControlFlow!
+        self._name_style = config.get('name_style', 'confusing')
         if config['variables']:
             try:
                 ast = self._stage(
@@ -401,12 +405,13 @@ class Obfuscator:
         return result if result is not None else ast
 
     def _apply_vars(self, ast):
+        style = getattr(self, '_name_style', 'confusing')
         try:
-            transformer = VariableRenamer(seed=self.seed, style='confusing')
+            transformer = VariableRenamer(seed=self.seed, style=style)
         except TypeError:
             try:
                 rng = make_rng(self.seed ^ 0xFEEDFACE)
-                transformer = VariableRenamer(rng=rng, style='confusing')
+                transformer = VariableRenamer(rng=rng, style=style)
             except TypeError:
                 try:
                     transformer = VariableRenamer(seed=self.seed)

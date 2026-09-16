@@ -256,6 +256,11 @@ class ASTUnparser:
         for stmt in block.statements:
             s = self._dispatch(stmt)
             if s:
+                # Lua-грамматика: инструкция, начинающаяся с '(' после
+                # инструкции, заканчивающейся на ')', склеивается в вызов
+                # (prefix call). ';' — nop-разделитель, снимает неоднозначность.
+                if s.startswith('('):
+                    s = ';' + s
                 parts.append(self._indent() + s)
         if block.return_stat is not None:
             ret = self._dispatch(block.return_stat)

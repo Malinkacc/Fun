@@ -44,6 +44,11 @@ class NameGenerator:
         style = self.style
         if style == 'mixed':
             style = self.rng.choice(['confusing', 'hex', 'underscore'])
+        if style == 'luraph':
+            # детерминированная смесь: 7 коротких неоднозначных + 1 длинный
+            # confusing (гарантирует фичу homoglyph_names рядом с short_names)
+            self._luraph_i = getattr(self, '_luraph_i', 0) + 1
+            style = 'confusing' if self._luraph_i % 8 == 0 else 'short'
         
         for _ in range(100):
             length = self.rng.randint(min_length, max_length)
@@ -53,6 +58,8 @@ class NameGenerator:
                 name = self._gen_hex(length)
             elif style == 'underscore':
                 name = self._gen_underscore(length)
+            elif style == 'short':
+                name = self._gen_short()
             else:
                 name = self._gen_confusing(length)
             if name not in self.used_names and name not in LUA_RESERVED:
@@ -87,6 +94,25 @@ class NameGenerator:
             else:
                 result.append(self.rng.choice('0123456789'))
         return ''.join(result)
+    
+    def _gen_short(self) -> str:
+        """
+        Короткие неоднозначные имена в стиле Luraph: l / I / O и их
+        комбинации длиной 1-3 (Il, lO, Oll...). Пул 3+9+27=39 имён;
+        если исчерпан — растим длину (всё ещё из неоднозначного алфавита).
+        """
+        for length in (1, 2, 3):
+            for _ in range(30):
+                name = ''.join(self.rng.choice('lIO') for _ in range(length))
+                if name not in self.used_names and name not in LUA_RESERVED:
+                    return name
+        length = 4
+        while length <= 8:
+            name = ''.join(self.rng.choice('lIO') for _ in range(length))
+            if name not in self.used_names and name not in LUA_RESERVED:
+                return name
+            length += 1
+        return ''.join(self.rng.choice('lIO') for _ in range(9))
 
 
 def make_rng(seed: Optional[int] = None) -> random.Random:

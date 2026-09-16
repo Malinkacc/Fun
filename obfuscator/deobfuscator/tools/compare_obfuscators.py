@@ -77,8 +77,21 @@ def analyze_source(source: str, name: str) -> dict:
     
     # Naming
     features["homoglyph_names"] = bool(re.search(r'[Il1O0]{4,}', source))
+    # короткие неоднозначные имена: абсолютный порог ИЛИ доля среди local'ов
+    # (порог >20 был подогнан под плотность Luraph; маленьким скриптам NZL
+    #  он физически недоступен, поэтому добавлен ratio-критерий)
+    _short = len(re.findall(r'\blocal\s+[a-zA-Z]{1,3}\b', source))
+    # total считаем только по «голым» именам: инфраструктурные local'и
+    # NZL (_0x..., __) не относятся к фиче именования
+    _total = len(re.findall(r'\blocal\s+(?:function\s+)?[A-Za-z]', source))
+    # использования коротких неоднозначных имён (l/I/O-алфавит) как токенов:
+    # NZL-automat хоистит local'ы в одну строку, поэтому деклараций мало,
+    # но использования заполняют весь код; в обычном коде таких токенов ~0
+    _short_use = len(re.findall(r'(?<![\w.])[lIO]{1,3}(?![\w(])', source))
     features["short_ambiguous_names"] = bool(
-        len(re.findall(r'\blocal\s+[a-zA-Z]{1,3}\b', source)) > 20
+        _short > 20
+        or (_short >= 6 and _total > 0 and _short * 2 >= _total)
+        or _short_use >= 25
     )
     
     # Numbers
