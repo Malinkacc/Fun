@@ -255,21 +255,43 @@ class LuaSandbox:
         co.rawset('running', lambda args: state['cur'])
         return co
 
+    @staticmethod
+    def b32(v) -> int:
+        """Нормализация аргумента bit32 по семантике Luau: любое число
+        приводится к unsigned 32-bit (отрицательные — как 2^32 + x)."""
+        try:
+            x = int(v)
+        except (TypeError, ValueError):
+            return 0
+        return x & 0xFFFFFFFF
+
     def _make_bit32(self):
         b = LuaTable()
-        b.rawset('band', lambda args: self._band(args))
-        b.rawset('bor', lambda args: self._bor(args))
-        b.rawset('bxor', lambda args: self._bxor(args))
+        b.rawset('band', lambda args: self._band(args))  # _band нормализует маской
+        b.rawset('bor', lambda args: self._bor(args))  # _bor нормализует аргументы
+        b.rawset('bxor', lambda args: self._bxor(args))  # _bxor нормализует аргументы
         b.rawset('bnot', lambda args: (~int(args[0])) & 0xFFFFFFFF if args else 0)
-        b.rawset('lshift', lambda args: (int(args[0]) << int(args[1])) & 0xFFFFFFFF if len(args)>=2 else 0)
-        b.rawset('rshift', lambda args: (int(args[0]) & 0xFFFFFFFF) >> int(args[1]) if len(args)>=2 else 0)
-        b.rawset('arshift', lambda args: int(args[0]) >> int(args[1]) if len(args)>=2 else 0)
-        b.rawset('rrotate', lambda args: self._rot32(int(args[0]), -int(args[1])) if len(args)>=2 else 0)
-        b.rawset('lrotate', lambda args: self._rot32(int(args[0]), int(args[1])) if len(args)>=2 else 0)
+        b.rawset('lshift', lambda args: (self.b32(args[0]) << int(args[1])) & 0xFFFFFFFF if len(args) >= 2 and 0 <= int(args[1]) < 32 else 0)
+        b.rawset('rshift', lambda args: self.b32(args[0]) >> int(args[1]) if len(args) >= 2 and 0 <= int(args[1]) < 32 else 0)
+        b.rawset('arshift', lambda args: self._arshift(args[0], int(args[1])) if len(args) >= 2 else 0)
+        b.rawset('rrotate', lambda args: self._rot32(self.b32(args[0]), -int(args[1])) if len(args) >= 2 else 0)
+        b.rawset('lrotate', lambda args: self._rot32(self.b32(args[0]), int(args[1])) if len(args) >= 2 else 0)
         b.rawset('extract', lambda args: self._extract(args))
         b.rawset('countlz', lambda args: self._countlz(args))
         b.rawset('countrz', lambda args: self._countrz(args))
         return b
+
+    def _arshift(self, x, n: int) -> int:
+        """Luau bit32.arshift: сдвиг >= 32 даёт 0; иначе unsigned32
+        трактуется как signed32, сдвигается арифметически и результат
+        снова нормализуется в unsigned32."""
+        u = self.b32(x)
+        if n < 0:
+            return 0
+        if n >= 32:
+            return 0
+        s = u - 0x100000000 if u >= 0x80000000 else u
+        return (s >> n) & 0xFFFFFFFF
 
     def _rot32(self, x, n):
         x &= 0xFFFFFFFF
@@ -287,15 +309,15 @@ class LuaSandbox:
 
     def _band(self, args):
         r = 0xFFFFFFFF
-        for a in args: r &= int(a)
+        for a in args: r &= self.b32(a)
         return r
     def _bor(self, args):
         r = 0
-        for a in args: r |= int(a)
+        for a in args: r |= self.b32(a)
         return r
     def _bxor(self, args):
         r = 0
-        for a in args: r ^= int(a)
+        for a in args: r ^= self.b32(a)
         return r
 
     # ─── String helpers ───────────────────────────────────────────────
