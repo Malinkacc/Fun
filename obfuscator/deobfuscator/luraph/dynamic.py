@@ -136,6 +136,14 @@ def extract_payload(source: str, max_steps: int = 1_500_000_000,
                                 elapsed=time.time() - t0)
 
 
+def apply_pipeline(payload: str, level: str = 'full') -> str:
+    """Прогнать перехваченный payload через обычный конвейер деобфускатора
+    (constant fold, string decrypt, name normalize, luraph deep и т.д.).
+    Payload сам может содержать остаточную защиту — конвейер её снимает."""
+    from obfuscator.deobfuscator.engine import deobfuscate_source
+    return deobfuscate_source(payload, level=level)
+
+
 # ---------------------------------------------------------------------------
 # self-test: синтетическая проверка механизма (быстро, без реального образца)
 # ---------------------------------------------------------------------------
@@ -176,6 +184,15 @@ def _self_test() -> int:
     check('T4 compile_mode nested', len(r4.captured) == 2,
           'captured=%d' % len(r4.captured))
 
+    # T5: apply_pipeline прогоняет payload через конвейер без падений
+    try:
+        out5 = apply_pipeline('local x = 1 + 2\nreturn x * 10\n')
+        cond5 = isinstance(out5, str) and 'return' in out5
+    except Exception as e:  # noqa: BLE001
+        out5 = 'EXC %s' % e
+        cond5 = False
+    check('T5 apply_pipeline', cond5, 'out=%r' % out5[:50])
+
     print('\nResult: %d/%d' % (passed, passed + failed))
     print('[OK] ALL PASSED' if failed == 0 else '[XX] FAILURES: %d' % failed)
     return 0 if failed == 0 else 1
@@ -192,6 +209,9 @@ def main(argv=None) -> int:
                     help='печатать прогресс каждые N шагов (0 = выкл)')
     ap.add_argument('--compile', action='store_true',
                     help='compile_mode: исполнять перехваченные load()')
+    ap.add_argument('--pipeline', action='store_true',
+                    help='после перехвата прогнать payload через конвейер '
+                         'деобфускатора и сохранить <out>.clean.lua')
     ap.add_argument('--test', action='store_true', help='синтетический self-test')
     a = ap.parse_args(argv)
 
@@ -219,6 +239,17 @@ def main(argv=None) -> int:
             with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(p)
             print('saved -> %s' % a.out)
+        if a.pipeline:
+            print('applying deobfuscator pipeline to payload...')
+            cleaned = apply_pipeline(p)
+            clean_path = (a.out + '.clean.lua') if a.out else 'payload.clean.lua'
+            cdir = os.path.dirname(os.path.abspath(clean_path))
+            if cdir and not os.path.isdir(cdir):
+                os.makedirs(cdir, exist_ok=True)
+            with open(clean_path, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(cleaned)
+            print('pipeline: %d -> %d bytes, saved -> %s'
+                  % (len(p), len(cleaned), clean_path))
         return 0
     return 1
 
