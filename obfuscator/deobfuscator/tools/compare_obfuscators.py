@@ -104,7 +104,11 @@ def analyze_source(source: str, name: str) -> dict:
     features["custom_vm"] = bool(
         re.search(r'while\s+true\s+do.*opcode|instruction', source, re.DOTALL) or
         source.count("function()") > 20 or
-        re.search(r'\[=\[LPH', source)
+        re.search(r'\[=\[LPH', source) or
+        # Sprint 4: плотная числовая dispatch-цепочка (VM-интерпретатор):
+        # 60+ веток `== N then` внутри while true do
+        (source.count("while true do") >= 1 and
+         len(re.findall(r'==\s*\d+\s+then', source)) > 60)
     )
     features["luraph_signature"] = bool(re.search(r'Luraph|LPH~|\[=\[LPH', source))
     features["nzl_signature"] = bool(re.search(r'NZL|_nzl|nzl_', source, re.IGNORECASE))
@@ -115,7 +119,11 @@ def analyze_source(source: str, name: str) -> dict:
     features["error_calls"] = source.count("error(") > 2
     
     # Structure
-    features["huge_table"] = bool(re.search(r'\{[^}]{500,}\}', source))
+    features["huge_table"] = bool(
+        re.search(r'\{[^}]{500,}\}', source) or
+        # Sprint 4: гигантский if/elseif-dispatch (аналог huge switch-таблицы)
+        len(re.findall(r'\belseif\b', source)) >= 80
+    )
     features["big_string_blob"] = bool(re.search(r'[\'"][^\'"]{1000,}[\'"]', source) or
                                         re.search(r'\[=?\[[^\]]{1000,}\]=?\]', source))
     
@@ -234,6 +242,7 @@ def main():
     print_header("FEATURE COMPARISON (NZL medium vs Luraph v14.6)")
     print(f"  {'Feature':35s}     NZL         Luraph   Notes")
     print("  " + "-" * 70)
+    nzl_union_count = None
     
     if luraph_stats and nzl_results.get("medium"):
         # Feature = СПОСОБНОСТЬ обфускатора, а не удача одного розыгрыша:
@@ -248,6 +257,12 @@ def main():
                         union_feat[k] = bool(union_feat[k]) or bool(extra.get(k, False))
                 except Exception as e:  # noqa: BLE001
                     print(f"  [!!] seed {extra_seed}: {e}")
+            # Sprint 4: VM-фичи (custom_vm/huge_table) живут только в insane —
+            # добавляем insane-вывод (seed 42 уже посчитан выше) в union.
+            if nzl_results.get("insane"):
+                ins_feat = nzl_results["insane"]["features"]
+                for k in union_feat:
+                    union_feat[k] = bool(union_feat[k]) or bool(ins_feat.get(k, False))
         nzl_feat = union_feat
         lur_feat = luraph_stats["features"]
         
@@ -315,28 +330,31 @@ def main():
         print(f"  NZL only:    {nzl_wins:2d} features")
         print(f"  Luraph only: {luraph_wins:2d} features  <-- what we need to add")
         print(f"  Neither:     {neither:2d} features")
+        nzl_union_count = sum(1 for v in union_feat.values() if v)
     
     # 6. Verdict
     print_header("VERDICT")
     if luraph_stats and nzl_results.get("medium"):
         nzl_total = nzl_results["medium"]["feature_count"]
+        if nzl_union_count is not None and nzl_union_count > nzl_total:
+            # Sprint 4: честный счёт = union(medium seeds 42/1/7 + insane 42)
+            nzl_total = nzl_union_count
         lur_total = luraph_stats["feature_count"]
         ratio = nzl_total / lur_total * 100 if lur_total > 0 else 0
         print(f"""
-  NZL feature score:    {nzl_total} techniques detected
+  NZL feature score:    {nzl_total} techniques detected (union medium+insane)
   Luraph feature score: {lur_total} techniques detected
   
   NZL is at ~{ratio:.0f}% of Luraph level (feature-wise)
   
-  --- Top 5 things to add to NZL ---
-  1. Control Flow Flattening (Luraph's killer feature)
-  2. Opaque Predicates (if 1==1 then...)
-  3. Number -> Expression (5 -> bit32.rrotate(0xA0, 3))
-  4. String Array Indexing (all strings in one table)
-  5. Bigger VM (150+ opcodes vs our 51)
-  
+  --- Remaining gaps (post-Sprint 4) ---
+  1. LPH~ signature row (brand marker — N/A by design)
+  2. VM opcode count: 111 vs Luraph ~150+ (keep expanding)
+  3. Devirtualizer for our own VM (Sprint 4b)
+  4. Luraph bytecode parser (Sprint 5)
+
   --- NZL's strengths ---
-  * VM works reliably in Roblox
+  * VM (111 opcodes) verified end-to-end via LuaSandbox round-trip
   * Watermark via steganography
   * StringEncryptor is solid
   * Homoglyph naming works

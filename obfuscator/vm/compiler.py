@@ -666,6 +666,9 @@ class Compiler:
         for i in range(n_exprs, 3):
             self._proto.emit_op(Opcode.LOADNIL, a=iter_base + i, b=0, line=stat.line)
 
+        # TFORCALL/TFORLOOP требуют: func,state,ctrl в iter_base..+2,
+        # переменные цикла строго в iter_base+3.. — чистим хвосты temps
+        self._regs.free_to(iter_base + 3)
         n_vars = len(stat.names)
         var_base = self._regs.allocate_range(n_vars)
 
@@ -972,19 +975,26 @@ class Compiler:
             '<=': Opcode.LE,
             '>': Opcode.GT,
             '>=': Opcode.GE,
+            # Sprint 4: bitwise
+            '&': Opcode.BAND,
+            '|': Opcode.BOR,
+            '~': Opcode.BXOR,
+            '<<': Opcode.SHL,
+            '>>': Opcode.SHR,
         }
         opcode = op_to_opcode.get(op)
         if opcode is None:
             raise UnsupportedFeature(f'BinaryOp {op}')
 
+        saved_level = self._regs.current_level()
         left_reg = self._compile_expr(expr.left)
         right_reg = self._compile_expr(expr.right)
 
         self._proto.emit_op(opcode, a=target, b=left_reg, c=right_reg, line=expr.line)
 
-        max_reg = max(left_reg, right_reg)
-        if max_reg > target:
-            self._regs.free_to(target + 1)
+        # освобождаем только временные регистры этого выражения:
+        # free_to(target+1) убил бы регистры цикла/внешние, если target ниже
+        self._regs.free_to(max(saved_level, target + 1))
 
     # ──────────────────────────────────────────────────────────────────────
     # unary op
@@ -995,22 +1005,24 @@ class Compiler:
             '-': Opcode.UNM,
             'not': Opcode.NOT,
             '#': Opcode.LEN,
+            '~': Opcode.BNOT,
         }
         opcode = op_to_opcode.get(expr.op)
         if opcode is None:
             raise UnsupportedFeature(f'UnaryOp {expr.op}')
 
+        saved_level = self._regs.current_level()
         operand_reg = self._compile_expr(expr.operand)
         self._proto.emit_op(opcode, a=target, b=operand_reg, line=expr.line)
 
-        if operand_reg > target:
-            self._regs.free_to(target + 1)
+        self._regs.free_to(max(saved_level, target + 1))
 
     # ──────────────────────────────────────────────────────────────────────
     # index
     # ──────────────────────────────────────────────────────────────────────
 
     def _compile_index_to_reg(self, expr: IndexExpr, target: int) -> None:
+        saved_level = self._regs.current_level()
         obj_reg = self._compile_expr(expr.obj)
 
         if expr.is_dot:
@@ -1021,8 +1033,7 @@ class Compiler:
             key_reg = self._compile_expr(expr.index)
             self._proto.emit_op(Opcode.GETTABLE, a=target, b=obj_reg, c=key_reg, line=expr.line)
 
-        if obj_reg > target:
-            self._regs.free_to(target + 1)
+        self._regs.free_to(max(saved_level, target + 1))
 
     def _index_field_name(self, index_node: Expr) -> str:
         if isinstance(index_node, StringLit):
@@ -1035,12 +1046,91 @@ class Compiler:
     # call
     # ──────────────────────────────────────────────────────────────────────
 
+    # Sprint 4: библиотечные вызовы -> отдельные опкоды VM (100+ набор).
+    # (lib, method) -> (Opcode, min_args, max_args)
+    _LIB_CALLS = {
+        ('', 'type'): (Opcode.TYPEOF, 1, 1),
+        ('', 'tonumber'): (Opcode.TONUM, 1, 1),
+        ('', 'tostring'): (Opcode.TOSTR, 1, 1),
+        ('bit32', 'band'): (Opcode.BAND, 2, 2),
+        ('bit32', 'bor'): (Opcode.BOR, 2, 2),
+        ('bit32', 'bxor'): (Opcode.BXOR, 2, 2),
+        ('bit32', 'bnot'): (Opcode.BNOT, 1, 1),
+        ('bit32', 'lshift'): (Opcode.SHL, 2, 2),
+        ('bit32', 'rshift'): (Opcode.SHR, 2, 2),
+        ('bit32', 'lrotate'): (Opcode.LROT, 2, 2),
+        ('bit32', 'rrotate'): (Opcode.RROT, 2, 2),
+        ('math', 'abs'): (Opcode.ABS, 1, 1),
+        ('math', 'floor'): (Opcode.FLOOR, 1, 1),
+        ('math', 'ceil'): (Opcode.CEIL, 1, 1),
+        ('math', 'sqrt'): (Opcode.SQRT, 1, 1),
+        ('math', 'min'): (Opcode.MMIN, 2, 2),
+        ('math', 'max'): (Opcode.MMAX, 2, 2),
+        ('string', 'upper'): (Opcode.UPPER, 1, 1),
+        ('string', 'lower'): (Opcode.LOWER, 1, 1),
+        ('string', 'rep'): (Opcode.REP, 2, 2),
+        ('string', 'format'): (Opcode.STRFMT, 2, 2),
+        ('string', 'byte'): (Opcode.BYTE, 1, 2),
+        ('string', 'sub'): (Opcode.SUBSTR, 2, 3),
+        ('string', 'char'): (Opcode.CHAR, 1, 4),
+        ('string', 'len'): (Opcode.STRLEN, 1, 1),
+        ('table', 'concat'): (Opcode.TBLCONCAT, 1, 2),
+        ('table', 'insert'): (Opcode.TBLINSERT, 2, 2),
+        ('table', 'find'): (Opcode.TBLFIND, 2, 2),
+        ('table', 'remove'): (Opcode.TBLREMOVE, 1, 2),
+    }
+
+    def _lib_call_key(self, expr: CallExpr):
+        func = expr.func
+        if isinstance(func, IndexExpr) and func.is_dot and isinstance(func.obj, NameExpr):
+            if isinstance(func.index, StringLit):
+                return (func.obj.name, func.index.value)
+            if isinstance(func.index, NameExpr):
+                return (func.obj.name, func.index.name)
+            return None
+        if isinstance(func, NameExpr) and func.name in ('type', 'tonumber', 'tostring'):
+            return ('', func.name)
+        return None
+
+    def _try_compile_lib_call(self, expr: CallExpr) -> Optional[int]:
+        """
+        Компилирует вызовы bit32.*/math.*/string.*/table.*/type/tonumber/
+        tostring в dedicated-опкоды Sprint 4. Возвращает регистр результата
+        или None, если вызов не из таблицы.
+        """
+        key = self._lib_call_key(expr)
+        if key is None:
+            return None
+        spec = self._LIB_CALLS.get(key)
+        if spec is None:
+            return None
+        opcode, min_args, max_args = spec
+        if not (min_args <= len(expr.args) <= max_args):
+            return None
+
+        base = self._regs.allocate_range(1 + max_args)
+        for i in range(max_args):
+            reg = base + 1 + i
+            if i < len(expr.args):
+                self._compile_expr_to_reg(expr.args[i], reg)
+            else:
+                self._proto.emit_op(Opcode.LOADNIL, a=reg, b=0, line=expr.line)
+        self._proto.emit_op(
+            opcode, a=base, b=base + 1, c=base + 2, line=expr.line
+        )
+        self._regs.free_to(base + 1)
+        return base
+
     def _compile_call(self, expr: CallExpr, want_results: int = 1) -> int:
         """
         want_results:
         - 0 = результат игнорируем
         - 1 = один результат
         """
+        lib_base = self._try_compile_lib_call(expr)
+        if lib_base is not None:
+            return lib_base
+
         n_args = len(expr.args)
         base = self._regs.allocate_range(1 + n_args)
 
@@ -1061,15 +1151,19 @@ class Compiler:
         return base
 
     def _compile_call_to_reg(self, expr: CallExpr, target: int) -> None:
+        saved_level = self._regs.current_level()
         result_base = self._compile_call(expr, want_results=1)
         if result_base != target:
             self._proto.emit_op(Opcode.MOVE, a=target, b=result_base, line=expr.line)
+            # результат уже в target — кадр вызова освобождаем
+            self._regs.free_to(saved_level)
 
     # ──────────────────────────────────────────────────────────────────────
     # method call
     # ──────────────────────────────────────────────────────────────────────
 
     def _compile_method_call_to_reg(self, expr: MethodCallExpr, target: int) -> None:
+        saved_level = self._regs.current_level()
         n_args = len(expr.args)
         base = self._regs.allocate_range(2 + n_args)
 
@@ -1087,13 +1181,24 @@ class Compiler:
         if base != target:
             self._proto.emit_op(Opcode.MOVE, a=target, b=base, line=expr.line)
 
-        self._regs.free_to(target + 1)
+        self._regs.free_to(max(saved_level, target + 1))
 
     # ──────────────────────────────────────────────────────────────────────
     # table constructor
     # ──────────────────────────────────────────────────────────────────────
 
     def _compile_table_to_reg(self, expr: TableExpr, target: int) -> None:
+        # {...} -> VARARG multi (b=2): таблица со всеми varargs
+        if (
+            len(expr.fields) == 1
+            and not expr.fields[0].is_name
+            and expr.fields[0].key is None
+            and isinstance(expr.fields[0].value, VarargLit)
+        ):
+            self._proto.emit_op(Opcode.VARARG, a=target, b=2, line=expr.line)
+            return
+
+        saved_level = self._regs.current_level()
         n_array = 0
         n_hash = 0
 
@@ -1126,7 +1231,7 @@ class Compiler:
                     k=kidx,
                     line=f.line if hasattr(f, 'line') else 0,
                 )
-                self._regs.free_to(target + 1)
+                self._regs.free_to(max(saved_level, target + 1))
 
             elif f.key is not None:
                 key_reg = self._compile_expr(f.key)
@@ -1138,7 +1243,7 @@ class Compiler:
                     c=val_reg,
                     line=0,
                 )
-                self._regs.free_to(target + 1)
+                self._regs.free_to(max(saved_level, target + 1))
 
             else:
                 val_reg = self._compile_expr(f.value)
@@ -1152,7 +1257,7 @@ class Compiler:
                     c=val_reg,
                     line=0,
                 )
-                self._regs.free_to(target + 1)
+                self._regs.free_to(max(saved_level, target + 1))
                 array_index += 1
 
 

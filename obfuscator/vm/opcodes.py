@@ -68,6 +68,81 @@ class Opcode(IntEnum):
     CHECKSUM = 49
     TRAP = 50
 
+    # ═══════════════════════════════════════════════════════════════
+    # Sprint 4: расширенный набор (100+ опкодов как у Luraph)
+    # ═══════════════════════════════════════════════════════════════
+    # Bitwise (bit32 в runtime)
+    BAND = 51
+    BOR = 52
+    BXOR = 53
+    BNOT = 54
+    SHL = 55
+    SHR = 56
+    LROT = 57
+    RROT = 58
+    # Register + immediate-constant variants (C = индекс константы)
+    ADDK = 59
+    SUBK = 60
+    MULK = 61
+    DIVK = 62
+    MODK = 63
+    EQK = 64
+    LTK = 65
+    LEK = 66
+    # Table extensions
+    GETTABLE_K = 67
+    SETTABLE_K = 68
+    APPEND = 69
+    TBLCONCAT = 70
+    TBLFIND = 71
+    TBLREMOVE = 72
+    TBLINSERT = 73
+    # String library
+    STRLEN = 74
+    CHAR = 75
+    BYTE = 76
+    SUBSTR = 77
+    REP = 78
+    UPPER = 79
+    LOWER = 80
+    STRFMT = 81
+    SPLIT = 82
+    # Math library
+    ABS = 83
+    FLOOR = 84
+    CEIL = 85
+    SQRT = 86
+    MMIN = 87
+    MMAX = 88
+    SIGN = 89
+    # Conversions / type introspection
+    TYPEOF = 90
+    TONUM = 91
+    TOSTR = 92
+    TOBOOL = 93
+    # Register shuffling
+    DUP = 94
+    SWAP = 95
+    # Control flow extensions
+    JMPBACK = 96
+    JMPIFK = 97
+    # Environment / metatables
+    RAWGET = 98
+    RAWSET = 99
+    GETMETA = 100
+    SETMETA = 101
+    # Anti-analysis (opaque / junk)
+    OPAQUE_T = 102
+    OPAQUE_F = 103
+    HONEYPOT = 104
+    # Misc
+    SELECT = 105
+    PACKVAR = 106
+    UNPACKT = 107
+    YIELDK = 108
+    ASSERT = 109
+    ERRORCALL = 110
+
 
 class InstrFormat(IntEnum):
     NONE = 0
@@ -141,6 +216,68 @@ OPCODE_FORMATS: Dict[Opcode, InstrFormat] = {
     Opcode.NOP: InstrFormat.NONE,
     Opcode.CHECKSUM: InstrFormat.X,
     Opcode.TRAP: InstrFormat.NONE,
+
+    # Sprint 4 formats
+    Opcode.BAND: InstrFormat.ABC,
+    Opcode.BOR: InstrFormat.ABC,
+    Opcode.BXOR: InstrFormat.ABC,
+    Opcode.BNOT: InstrFormat.AB,
+    Opcode.SHL: InstrFormat.ABC,
+    Opcode.SHR: InstrFormat.ABC,
+    Opcode.LROT: InstrFormat.ABC,
+    Opcode.RROT: InstrFormat.ABC,
+    Opcode.ADDK: InstrFormat.ABK,
+    Opcode.SUBK: InstrFormat.ABK,
+    Opcode.MULK: InstrFormat.ABK,
+    Opcode.DIVK: InstrFormat.ABK,
+    Opcode.MODK: InstrFormat.ABK,
+    Opcode.EQK: InstrFormat.ABK,
+    Opcode.LTK: InstrFormat.ABK,
+    Opcode.LEK: InstrFormat.ABK,
+    Opcode.GETTABLE_K: InstrFormat.ABK,
+    Opcode.SETTABLE_K: InstrFormat.ABK,
+    Opcode.APPEND: InstrFormat.AB,
+    Opcode.TBLCONCAT: InstrFormat.ABC,
+    Opcode.TBLFIND: InstrFormat.ABC,
+    Opcode.TBLREMOVE: InstrFormat.ABC,
+    Opcode.TBLINSERT: InstrFormat.ABC,
+    Opcode.STRLEN: InstrFormat.AB,
+    Opcode.CHAR: InstrFormat.ABC,
+    Opcode.BYTE: InstrFormat.ABC,
+    Opcode.SUBSTR: InstrFormat.ABC,
+    Opcode.REP: InstrFormat.ABC,
+    Opcode.UPPER: InstrFormat.AB,
+    Opcode.LOWER: InstrFormat.AB,
+    Opcode.STRFMT: InstrFormat.ABC,
+    Opcode.SPLIT: InstrFormat.ABC,
+    Opcode.ABS: InstrFormat.AB,
+    Opcode.FLOOR: InstrFormat.AB,
+    Opcode.CEIL: InstrFormat.AB,
+    Opcode.SQRT: InstrFormat.AB,
+    Opcode.MMIN: InstrFormat.ABC,
+    Opcode.MMAX: InstrFormat.ABC,
+    Opcode.SIGN: InstrFormat.AB,
+    Opcode.TYPEOF: InstrFormat.AB,
+    Opcode.TONUM: InstrFormat.AB,
+    Opcode.TOSTR: InstrFormat.AB,
+    Opcode.TOBOOL: InstrFormat.AB,
+    Opcode.DUP: InstrFormat.AB,
+    Opcode.SWAP: InstrFormat.AB,
+    Opcode.JMPBACK: InstrFormat.X,
+    Opcode.JMPIFK: InstrFormat.AX,
+    Opcode.RAWGET: InstrFormat.ABC,
+    Opcode.RAWSET: InstrFormat.ABC,
+    Opcode.GETMETA: InstrFormat.AB,
+    Opcode.SETMETA: InstrFormat.AB,
+    Opcode.OPAQUE_T: InstrFormat.A,
+    Opcode.OPAQUE_F: InstrFormat.A,
+    Opcode.HONEYPOT: InstrFormat.NONE,
+    Opcode.SELECT: InstrFormat.ABC,
+    Opcode.PACKVAR: InstrFormat.ABC,
+    Opcode.UNPACKT: InstrFormat.ABC,
+    Opcode.YIELDK: InstrFormat.AB,
+    Opcode.ASSERT: InstrFormat.AB,
+    Opcode.ERRORCALL: InstrFormat.A,
 }
 
 

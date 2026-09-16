@@ -37,12 +37,14 @@ from obfuscator.ast_nodes import (
     FunctionExpr, NameExpr, CallExpr, IndexExpr,
     NumberLit, StringLit, NilLit, BoolLit,
     ReturnStat, CallStat,
+    NumericForStat, GenericForStat, CompoundAssignStat,
 )
 from obfuscator.ast_unparser import unparse
 from obfuscator.lexer import Lexer
 from obfuscator.parser import Parser
 from obfuscator.utils.random_gen import make_rng, NameGenerator
 from obfuscator.vm.compiler import Compiler, can_compile
+from obfuscator.vm.opcodes import Opcode
 from obfuscator.vm.runtime_lua import RuntimeGenerator
 
 
@@ -167,7 +169,8 @@ def _get_func_expr(stat: Stat) -> Optional[FunctionExpr]:
 #  FACTORY WRAPPER
 # ══════════════════════════════════════════════════════════════════
 
-def _wrap_in_factory_source(fn_name: str, func_expr: FunctionExpr) -> str:
+def _wrap_in_factory_source(fn_name: str, func_expr: FunctionExpr,
+                            captures: Tuple[str, ...] = ()) -> str:
     tmp_stat = LocalFunctionStat(
         name=fn_name,
         func=func_expr,
@@ -177,13 +180,89 @@ def _wrap_in_factory_source(fn_name: str, func_expr: FunctionExpr) -> str:
     tmp_chunk = Chunk(body=tmp_block, line=0)
 
     inner_src = unparse(tmp_chunk, minified=False)
+    params = ', '.join(captures)
 
     return (
-        f"local function __nzl_tmp_factory__()\n"
+        f"local function __nzl_tmp_factory__({params})\n"
         f"{inner_src}\n"
         f"return {fn_name}\n"
         f"end\n"
     )
+
+
+def _collect_global_refs(proto) -> Tuple[Set[str], Set[str]]:
+    """Имена GETGLOBAL/SETGLOBAL в proto и всех вложенных protos."""
+    gets: Set[str] = set()
+    sets: Set[str] = set()
+    stack = [proto]
+    while stack:
+        p = stack.pop()
+        for ins in getattr(p, 'code', []) or []:
+            if ins.op == Opcode.GETGLOBAL:
+                target = gets
+            elif ins.op == Opcode.SETGLOBAL:
+                target = sets
+            else:
+                continue
+            try:
+                const = p.constants[ins.k]
+                val = getattr(const, 'value', None)
+                if isinstance(val, str):
+                    target.add(val)
+            except Exception:
+                pass
+        stack.extend(getattr(p, 'protos', []) or [])
+    return gets, sets
+
+
+def _collect_assigned_names(node, out: Set[str]) -> Set[str]:
+    """Все имена, которым присваивают AssignStat/CompoundAssignStat."""
+    cls = type(node).__name__
+    if cls in ('AssignStat', 'CompoundAssignStat'):
+        for t in getattr(node, 'targets', []) or []:
+            if type(t).__name__ == 'NameExpr':
+                out.add(getattr(t, 'name', ''))
+    if hasattr(node, '__dataclass_fields__'):
+        for fname in node.__dataclass_fields__:
+            val = getattr(node, fname, None)
+            if isinstance(val, Node):
+                _collect_assigned_names(val, out)
+            elif isinstance(val, list):
+                for item in val:
+                    if isinstance(item, Node):
+                        _collect_assigned_names(item, out)
+    return out
+
+
+def _stat_declared_names(stat) -> Set[str]:
+    """Локальные имена, объявляемые стейтментом."""
+    cls = type(stat).__name__
+    names: Set[str] = set()
+    if cls == 'LocalAssignStat':
+        for n in getattr(stat, 'names', []) or []:
+            if isinstance(n, str):
+                names.add(n)
+    elif cls == 'LocalFunctionStat':
+        n = getattr(stat, 'name', None)
+        if isinstance(n, str):
+            names.add(n)
+    elif cls == 'NumericForStat':
+        n = getattr(stat, 'var', None)
+        if isinstance(n, str):
+            names.add(n)
+    elif cls == 'GenericForStat':
+        for n in getattr(stat, 'names', []) or []:
+            if isinstance(n, str):
+                names.add(n)
+    return names
+
+
+def _collect_block_locals(block) -> Set[str]:
+    """Локальные имена верхнего уровня блока."""
+    names: Set[str] = set()
+    for stat in getattr(block, 'statements', []) or []:
+        names |= _stat_declared_names(stat)
+    return names
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -195,38 +274,60 @@ def _compile_function_to_vm(
     func_expr: FunctionExpr,
     factory_lua_name: str,
     rng: random.Random,
-) -> Tuple[Optional[str], str]:
+    scope_locals: Optional[Set[str]] = None,
+    mutated_names: Optional[Set[str]] = None,
+) -> Tuple[Optional[str], str, List[str]]:
+    scope_locals = set(scope_locals or ())
+    mutated_names = set(mutated_names or ())
     try:
-        factory_src = _wrap_in_factory_source(fn_name, func_expr)
-        tokens = Lexer(factory_src).tokenize()
-        factory_ast = Parser(tokens).parse()
+        def _build(captures: Tuple[str, ...] = ()):
+            factory_src = _wrap_in_factory_source(fn_name, func_expr, captures)
+            tokens = Lexer(factory_src).tokenize()
+            factory_ast = Parser(tokens).parse()
 
-        if not factory_ast.body.statements:
-            return None, "empty factory AST"
+            if not factory_ast.body.statements:
+                return None, "empty factory AST"
+            factory_stat = factory_ast.body.statements[0]
+            if not isinstance(factory_stat, LocalFunctionStat):
+                return None, f"factory not LocalFunctionStat: {type(factory_stat).__name__}"
+            factory_func = factory_stat.func
 
-        factory_stat = factory_ast.body.statements[0]
-        if not isinstance(factory_stat, LocalFunctionStat):
-            return None, f"factory not LocalFunctionStat: {type(factory_stat).__name__}"
+            can_ok, can_reason = can_compile(factory_func)
+            if not can_ok:
+                return None, f"can_compile=False: {can_reason}"
 
-        factory_func = factory_stat.func
+            compiler = Compiler()
+            proto = compiler.compile_function(factory_func, name=factory_lua_name)
+            return proto, ''
 
-        can_ok, can_reason = can_compile(factory_func)
-        if not can_ok:
-            return None, f"can_compile=False: {can_reason}"
+        proto, err = _build()
+        if proto is None:
+            return None, err, []
 
-        compiler = Compiler()
-        proto = compiler.compile_function(factory_func, name=factory_lua_name)
+        # Свободные переменные: GETGLOBAL имени из внешних локалов чанка
+        # → передаём значения аргументами фабрики (иначе VM увидит nil).
+        gets, sets = _collect_global_refs(proto)
+        if sets & scope_locals:
+            return None, 'writes to outer local (unsupported)', []
+        captures = sorted(n for n in (gets & scope_locals) if n.isidentifier())
+        if captures and (set(captures) & mutated_names):
+            return None, 'captured local reassigned (unsupported)', []
+
+        if captures:
+            proto, err = _build(tuple(captures))
+            if proto is None:
+                return None, err, []
 
         rt_gen = RuntimeGenerator(seed=rng.randint(0, 0xFFFFFFFF))
         vm_code = rt_gen.generate_vm_wrapper(proto, fn_name=factory_lua_name)
 
-        return vm_code, ''
+        return vm_code, '', captures
 
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
         if _DEBUG:
             traceback.print_exc()
-        return None, err
+        return None, err, []
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -239,7 +340,8 @@ class VMProtectionTransformer:
     на VM-защищённые версии.
     """
 
-    def __init__(self, seed: Optional[int] = None, debug: bool = False):
+    def __init__(self, seed: Optional[int] = None, debug: bool = False,
+                 all_functions: bool = False):
         global _DEBUG
         if seed is None:
             seed = random.randint(0, 0xFFFFFFFF)
@@ -253,6 +355,7 @@ class VMProtectionTransformer:
             'functions_skipped': 0,
         }
         self._errors: List[str] = []
+        self.all_functions = all_functions
         _DEBUG = debug
 
     def _next_factory_name(self) -> str:
@@ -265,18 +368,23 @@ class VMProtectionTransformer:
         Возвращает (prelude_lua_code, new_ast).
         """
         factories: List[str] = []
+        mutated = _collect_assigned_names(ast, set())
 
-        self._process_block(ast.body, factories)
-        self._walk_block(ast.body, factories)
+        self._process_block(ast.body, factories, set(), mutated)
+        self._walk_block(ast.body, factories, _collect_block_locals(ast.body), mutated)
 
         prelude = '\n\n'.join(factories) if factories else ''
         return prelude, ast
 
-    def _process_block(self, block: Block, factories: List[str]) -> None:
+    def _process_block(self, block: Block, factories: List[str],
+                       scope_locals: Optional[Set[str]] = None,
+                       mutated_names: Optional[Set[str]] = None) -> None:
         """
         Ищет пары: [маркер] [функция] → заменяет на VM.
         """
         stmts = block.statements
+        mutated_names = set(mutated_names or ())
+        seen = set(scope_locals or ())
         i = 0
         new_stmts: List[Stat] = []
         marked_indices: Set[int] = set()
@@ -302,17 +410,28 @@ class VMProtectionTransformer:
                 i += 1
                 continue
 
+            declared = _stat_declared_names(stat)
+
             # Проверяем: помечен ли этот стейтмент как цель
-            if i in marked_indices:
+            # (Sprint 4: all_functions -> защищаем ВСЕ top-level функции)
+            if i in marked_indices or (
+                self.all_functions
+                and isinstance(stat, (LocalFunctionStat, FunctionDeclStat))
+            ):
                 if isinstance(stat, (LocalFunctionStat, FunctionDeclStat)):
-                    replacement = self._try_protect(stat, factories)
+                    # локальная рекурсия: имя самой функции доступно внутри
+                    replacement = self._try_protect(
+                        stat, factories, seen | declared, mutated_names
+                    )
                     if replacement is not None:
                         new_stmts.append(replacement)
+                        seen |= declared
                         i += 1
                         continue
                     else:
                         # Не удалось — оставляем как есть
                         new_stmts.append(stat)
+                        seen |= declared
                         i += 1
                         continue
                 else:
@@ -321,10 +440,12 @@ class VMProtectionTransformer:
                         f"marker before non-function: {type(stat).__name__}"
                     )
                     new_stmts.append(stat)
+                    seen |= declared
                     i += 1
                     continue
 
             new_stmts.append(stat)
+            seen |= declared
             i += 1
 
         block.statements = new_stmts
@@ -333,6 +454,8 @@ class VMProtectionTransformer:
         self,
         stat: Stat,
         factories: List[str],
+        scope_locals: Optional[Set[str]] = None,
+        mutated_names: Optional[Set[str]] = None,
     ) -> Optional[Stat]:
         fn_name = _get_func_name(stat)
         func_expr = _get_func_expr(stat)
@@ -346,11 +469,13 @@ class VMProtectionTransformer:
 
         factory_lua_name = self._next_factory_name()
 
-        factory_code, err = _compile_function_to_vm(
+        factory_code, err, captures = _compile_function_to_vm(
             fn_name=fn_name,
             func_expr=func_expr,
             factory_lua_name=factory_lua_name,
             rng=self.rng,
+            scope_locals=scope_locals,
+            mutated_names=mutated_names,
         )
 
         if factory_code is None:
@@ -363,7 +488,7 @@ class VMProtectionTransformer:
         line = getattr(stat, 'line', 0)
         call_expr = CallExpr(
             func=NameExpr(name=factory_lua_name, line=line),
-            args=[],
+            args=[NameExpr(name=c, line=line) for c in captures],
             line=line,
         )
 
@@ -384,36 +509,52 @@ class VMProtectionTransformer:
         self._stats['functions_protected'] += 1
         return replacement
 
-    def _walk_block(self, block: Block, factories: List[str]) -> None:
+    def _walk_block(self, block: Block, factories: List[str],
+                    scope_locals: Optional[Set[str]] = None,
+                    mutated_names: Optional[Set[str]] = None) -> None:
         for stat in block.statements:
-            self._walk_stat(stat, factories)
+            self._walk_stat(stat, factories, scope_locals, mutated_names)
 
-    def _walk_stat(self, stat, factories: List[str]) -> None:
+    def _walk_stat(self, stat, factories: List[str],
+                   scope_locals: Optional[Set[str]] = None,
+                   mutated_names: Optional[Set[str]] = None) -> None:
         if not hasattr(stat, '__dataclass_fields__'):
             return
+
+        scope_locals = set(scope_locals or ())
 
         for fname in stat.__dataclass_fields__:
             val = getattr(stat, fname, None)
             if isinstance(val, FunctionExpr):
                 if val.body:
-                    self._process_block(val.body, factories)
-                    self._walk_block(val.body, factories)
+                    inner_scope = scope_locals | _collect_block_locals(val.body)
+                    for p in getattr(val, 'params', []) or []:
+                        if isinstance(p, str):
+                            inner_scope.add(p)
+                    self._process_block(val.body, factories, inner_scope, mutated_names)
+                    self._walk_block(val.body, factories, inner_scope, mutated_names)
             elif isinstance(val, Block):
-                self._process_block(val, factories)
-                self._walk_block(val, factories)
+                inner_scope = scope_locals | _collect_block_locals(val)
+                self._process_block(val, factories, inner_scope, mutated_names)
+                self._walk_block(val, factories, inner_scope, mutated_names)
             elif isinstance(val, Node):
-                self._walk_stat(val, factories)
+                self._walk_stat(val, factories, scope_locals, mutated_names)
             elif isinstance(val, list):
                 for item in val:
                     if isinstance(item, FunctionExpr):
                         if item.body:
-                            self._process_block(item.body, factories)
-                            self._walk_block(item.body, factories)
+                            inner_scope = scope_locals | _collect_block_locals(item.body)
+                            for p in getattr(item, 'params', []) or []:
+                                if isinstance(p, str):
+                                    inner_scope.add(p)
+                            self._process_block(item.body, factories, inner_scope, mutated_names)
+                            self._walk_block(item.body, factories, inner_scope, mutated_names)
                     elif isinstance(item, Block):
-                        self._process_block(item, factories)
-                        self._walk_block(item, factories)
+                        inner_scope = scope_locals | _collect_block_locals(item)
+                        self._process_block(item, factories, inner_scope, mutated_names)
+                        self._walk_block(item, factories, inner_scope, mutated_names)
                     elif isinstance(item, Node):
-                        self._walk_stat(item, factories)
+                        self._walk_stat(item, factories, scope_locals, mutated_names)
                     elif isinstance(item, tuple):
                         for sub in item:
                             if isinstance(sub, (Block, Node)):

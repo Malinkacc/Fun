@@ -320,6 +320,7 @@ end'''
         proto_var = self.name_gen.generate()
         args_var = self.name_gen.generate()
         upvals_var = self.name_gen.generate()
+        varargs = self.name_gen.generate()
         r = n.regs
         pc = n.pc
         code = self.name_gen.generate()
@@ -335,7 +336,8 @@ end'''
         tmp = n.tmp1
 
         dispatch_branches = self._gen_dispatch_branches(
-            r, k_tbl, pc, code, env, tmp, a, b, c, kop, proto_var, upvals_var
+            r, k_tbl, pc, code, env, tmp, a, b, c, kop, proto_var, upvals_var,
+            varargs,
         )
 
         if self.add_junk_ops:
@@ -371,6 +373,13 @@ end'''
         end
     end
 
+    local {varargs} = {{}}
+    if {args_var} then
+        for {i} = ({proto_var}.num_params or 0) + 1, #{args_var} do
+            {varargs}[#{varargs} + 1] = {args_var}[{i}]
+        end
+    end
+
     while true do
         {instr} = {code}[{pc}]
         if not {instr} then break end
@@ -400,6 +409,7 @@ end'''
         kop: str,
         proto_var: str,
         upvals_var: str,
+        varargs: str,
     ) -> List[tuple]:
         branches: List[tuple] = []
         m = self.op_map
@@ -514,7 +524,12 @@ end'''
             for _i = 1, {b} do _rets[_i] = {r}[{a} + _i - 1] end
             return {self.names.tbl_unpack}(_rets, 1, {b})''')
 
-        add(Opcode.VARARG, f'{r}[{a}] = nil')
+        add(Opcode.VARARG, f'''if {b} == 1 then
+                {r}[{a}] = {varargs}[1]
+            else
+                {r}[{a}] = {{}}
+                for {tmp}i = 1, #{varargs} do {r}[{a}][{tmp}i] = {varargs}[{tmp}i] end
+            end''')
 
         add(Opcode.SELF, f'''{r}[{a} + 1] = {r}[{b}]
             {r}[{a}] = {r}[{b}][{r}[{c}]]''')
@@ -538,6 +553,109 @@ end'''
                 {r}[{a} + 2] = {r}[{a} + 3]
                 {pc} = {pc} + {kop}
             end''')
+
+        # ═══════════════ Sprint 4: расширенные опкоды ═══════════════
+        add(Opcode.BAND, f'{r}[{a}] = bit32.band({r}[{b}], {r}[{c}])')
+        add(Opcode.BOR, f'{r}[{a}] = bit32.bor({r}[{b}], {r}[{c}])')
+        add(Opcode.BXOR, f'{r}[{a}] = bit32.bxor({r}[{b}], {r}[{c}])')
+        add(Opcode.BNOT, f'{r}[{a}] = bit32.bnot({r}[{b}])')
+        add(Opcode.SHL, f'{r}[{a}] = bit32.lshift({r}[{b}], {r}[{c}])')
+        add(Opcode.SHR, f'{r}[{a}] = bit32.rshift({r}[{b}], {r}[{c}])')
+        add(Opcode.LROT, f'{r}[{a}] = bit32.lrotate({r}[{b}], {r}[{c}])')
+        add(Opcode.RROT, f'{r}[{a}] = bit32.rrotate({r}[{b}], {r}[{c}])')
+
+        add(Opcode.ADDK, f'{r}[{a}] = {r}[{b}] + {k_tbl}[{kop} + 1]')
+        add(Opcode.SUBK, f'{r}[{a}] = {r}[{b}] - {k_tbl}[{kop} + 1]')
+        add(Opcode.MULK, f'{r}[{a}] = {r}[{b}] * {k_tbl}[{kop} + 1]')
+        add(Opcode.DIVK, f'{r}[{a}] = {r}[{b}] / {k_tbl}[{kop} + 1]')
+        add(Opcode.MODK, f'{r}[{a}] = {r}[{b}] % {k_tbl}[{kop} + 1]')
+        add(Opcode.EQK, f'{r}[{a}] = ({r}[{b}] == {k_tbl}[{kop} + 1])')
+        add(Opcode.LTK, f'{r}[{a}] = ({r}[{b}] < {k_tbl}[{kop} + 1])')
+        add(Opcode.LEK, f'{r}[{a}] = ({r}[{b}] <= {k_tbl}[{kop} + 1])')
+
+        add(Opcode.GETTABLE_K, f'{r}[{a}] = {r}[{b}][{k_tbl}[{kop} + 1]]')
+        add(Opcode.SETTABLE_K, f'{r}[{a}][{k_tbl}[{kop} + 1]] = {r}[{b}]')
+        add(Opcode.APPEND, f'{r}[{a}][#{r}[{a}] + 1] = {r}[{b}]')
+        add(Opcode.TBLCONCAT, f'''local {tmp}sep = {r}[{c}]
+            if type({tmp}sep) ~= "string" then {tmp}sep = "" end
+            {r}[{a}] = table.concat({r}[{b}], {tmp}sep)''')
+        add(Opcode.TBLFIND, f'''local {tmp}res = nil
+            for {tmp}i = 1, #{r}[{b}] do
+                if {r}[{b}][{tmp}i] == {r}[{c}] then {tmp}res = {tmp}i break end
+            end
+            {r}[{a}] = {tmp}res''')
+        add(Opcode.TBLREMOVE, f'''local {tmp}t = {r}[{b}]
+            local {tmp}pos = {r}[{c}] or #{tmp}t
+            local {tmp}v = {tmp}t[{tmp}pos]
+            for {tmp}i = {tmp}pos, #{tmp}t - 1 do {tmp}t[{tmp}i] = {tmp}t[{tmp}i + 1] end
+            {tmp}t[#{tmp}t] = nil
+            {r}[{a}] = {tmp}v''')
+        add(Opcode.TBLINSERT, f'{r}[{b}][#{r}[{b}] + 1] = {r}[{c}]')
+
+        add(Opcode.STRLEN, f'{r}[{a}] = #{r}[{b}]')
+        add(Opcode.CHAR, f'''local {tmp}s = ""
+            for {tmp}i = {b}, {c} do {tmp}s = {tmp}s .. string.char({r}[{tmp}i]) end
+            {r}[{a}] = {tmp}s''')
+        add(Opcode.BYTE, f'{r}[{a}] = string.byte({r}[{b}], {r}[{c}] or 1)')
+        add(Opcode.SUBSTR, f'{r}[{a}] = string.sub({r}[{b}], {r}[{c}], {r}[{c} + 1] or -1)')
+        add(Opcode.REP, f'{r}[{a}] = string.rep({r}[{b}], {r}[{c}])')
+        add(Opcode.UPPER, f'{r}[{a}] = string.upper({r}[{b}])')
+        add(Opcode.LOWER, f'{r}[{a}] = string.lower({r}[{b}])')
+        add(Opcode.STRFMT, f'{r}[{a}] = string.format({r}[{b}], {r}[{c}])')
+        add(Opcode.SPLIT, f'''local {tmp}t = {{}}
+            local {tmp}s = {r}[{b}]
+            local {tmp}sep = tostring({r}[{c}] or ",")
+            local {tmp}pos = 1
+            while true do
+                local {tmp}i = string.find({tmp}s, {tmp}sep, {tmp}pos, true)
+                if not {tmp}i then
+                    {tmp}t[#{tmp}t + 1] = string.sub({tmp}s, {tmp}pos)
+                    break
+                end
+                {tmp}t[#{tmp}t + 1] = string.sub({tmp}s, {tmp}pos, {tmp}i - 1)
+                {tmp}pos = {tmp}i + #{tmp}sep
+            end
+            {r}[{a}] = {tmp}t''')
+
+        add(Opcode.ABS, f'{r}[{a}] = math.abs({r}[{b}])')
+        add(Opcode.FLOOR, f'{r}[{a}] = math.floor({r}[{b}])')
+        add(Opcode.CEIL, f'{r}[{a}] = math.ceil({r}[{b}])')
+        add(Opcode.SQRT, f'{r}[{a}] = math.sqrt({r}[{b}])')
+        add(Opcode.MMIN, f'{r}[{a}] = math.min({r}[{b}], {r}[{c}])')
+        add(Opcode.MMAX, f'{r}[{a}] = math.max({r}[{b}], {r}[{c}])')
+        add(Opcode.SIGN, f'''local {tmp}v = {r}[{b}]
+            {r}[{a}] = {tmp}v > 0 and 1 or ({tmp}v < 0 and -1 or 0)''')
+
+        add(Opcode.TYPEOF, f'{r}[{a}] = type({r}[{b}])')
+        add(Opcode.TONUM, f'{r}[{a}] = tonumber({r}[{b}])')
+        add(Opcode.TOSTR, f'{r}[{a}] = tostring({r}[{b}])')
+        add(Opcode.TOBOOL, f'{r}[{a}] = not not {r}[{b}]')
+
+        add(Opcode.DUP, f'{r}[{a}] = {r}[{b}]')
+        add(Opcode.SWAP, f'{r}[{a}], {r}[{b}] = {r}[{b}], {r}[{a}]')
+
+        add(Opcode.JMPBACK, f'{pc} = {pc} - {kop}')
+        add(Opcode.JMPIFK, f'if {r}[{a}] == {k_tbl}[{kop} + 1] then {pc} = {pc} + 1 end')
+
+        add(Opcode.RAWGET, f'{r}[{a}] = {r}[{b}][{r}[{c}]]')
+        add(Opcode.RAWSET, f'{r}[{a}][{r}[{b}]] = {r}[{c}]')
+        add(Opcode.GETMETA, f'''local {tmp}g = getmetatable
+            {r}[{a}] = {tmp}g and {tmp}g({r}[{b}]) or nil''')
+        add(Opcode.SETMETA, f'''local {tmp}s = setmetatable
+            if {tmp}s then {tmp}s({r}[{a}], {r}[{b}]) end''')
+
+        add(Opcode.OPAQUE_T, f'{r}[{a}] = (#tostring(type(nil)) == 3)')
+        add(Opcode.OPAQUE_F, f'{r}[{a}] = (#tostring(type(nil)) == 4)')
+        add(Opcode.HONEYPOT, f'local {tmp}h = #tostring(math.floor(1)) + #{r}[0]')
+
+        add(Opcode.SELECT, f'{r}[{a}] = nil')
+        add(Opcode.PACKVAR, f'''{r}[{a}] = {{}}
+            for {tmp}i = {b}, {c} do {r}[{a}][{tmp}i - {b} + 1] = {r}[{tmp}i] end''')
+        add(Opcode.UNPACKT, f'''local {tmp}t = {r}[{c}]
+            for {tmp}i = 0, {b} - 1 do {r}[{a} + {tmp}i] = {tmp}t[{tmp}i + 1] end''')
+        add(Opcode.YIELDK, f'{r}[{a}] = nil')
+        add(Opcode.ASSERT, f'if {r}[{a}] == false or {r}[{a}] == nil then error(tostring({r}[{b}])) end')
+        add(Opcode.ERRORCALL, f'error(tostring({r}[{a}]))')
 
         add(Opcode.CLOSE, 'local _nzl_close = nil')
         add(Opcode.NOP, 'local _nzl_nop = nil')

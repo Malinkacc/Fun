@@ -64,6 +64,30 @@ class LuaTable:
         return f"LuaTable(arr={self._array}, hash={self._hash})"
 
 
+class _EnvTable(LuaTable):
+    """Таблица-представление env-словаря (для _G / getfenv в VM-коде).
+
+    Строковые ключи читаются/пишутся прямо в env-словарь, поэтому
+    GETGLOBAL/SETGLOBAL внутри VM-диспетчера видят реальные глобалы.
+    """
+
+    def __init__(self, env: dict):
+        super().__init__()
+        self._env = env
+
+    def rawget(self, key):
+        v = super().rawget(key)
+        if v is None and isinstance(key, str):
+            return self._env.get(key)
+        return v
+
+    def rawset(self, key, value):
+        if isinstance(key, str):
+            self._env[key] = value
+        else:
+            super().rawset(key, value)
+
+
 class LuaFunction:
     def __init__(self, params, body, closure, sandbox, is_vararg=False):
         self.params = params
@@ -443,6 +467,7 @@ class LuaSandbox:
         exec_env = dict(self._globals)
         if env:
             exec_env.update(env)
+        exec_env['_G'] = _EnvTable(exec_env)
 
         try:
             self._exec_chunk(chunk, exec_env)
@@ -533,7 +558,7 @@ class LuaSandbox:
             self._exec_numeric_for(stmt, env)
         elif cls == 'GenericForStat':
             self._exec_generic_for(stmt, env)
-        elif cls == 'DoStat':
+        elif cls in ('DoStat', 'DoBlockStat'):
             body = getattr(stmt, 'body', None)
             if body:
                 self._exec_block(body, env)
@@ -836,7 +861,7 @@ class LuaSandbox:
             return getattr(node, 'value', False)
         elif cls in ('NilLit', 'Nil'):
             return None
-        elif cls in ('VarArg', 'Vararg'):
+        elif cls in ('VarArg', 'Vararg', 'VarargLit'):
             return env.get('...', [])
         elif cls == 'NameExpr':
             return env.get(getattr(node, 'name', ''))

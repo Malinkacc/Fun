@@ -94,6 +94,7 @@ DEFAULT_INSANE_CONFIG = {
     'variables': True,
     'control_flow': True,
     'vm_protection': True,   # ← VM защита функций с маркером @vm
+    'vm_all': True,          # ← Sprint 4: VM для ВСЕХ top-level функций
     'anti_tamper': True,
     'environment_checks': True,
     'watermark': True,
@@ -215,6 +216,7 @@ class Obfuscator:
         # 4. Variables      — переименовываем ДО control_flow (scope цел)
         # 5. ControlFlow    — flatten уже с новыми именами
 
+        self._vm_all = bool(config.get('vm_all', False))
         # ⚡ VM Protection — ПЕРВЫМ (до rename, чтобы маркеры не потерялись)
         if config.get('vm_protection'):
             try:
@@ -326,8 +328,12 @@ class Obfuscator:
     # ═══════════════════════════════════════════════════════════════
 
     def _apply_vm_protection(self, ast):
-        """Применяет VM защиту — ищет @vm маркеры и компилирует функции."""
-        transformer = VMProtectionTransformer(seed=self.seed ^ 0xF00DBEEF)
+        """Применяет VM защиту — ищет @vm маркеры и компилирует функции.
+        Sprint 4: config['vm_all'] -> защищать ВСЕ top-level функции."""
+        transformer = VMProtectionTransformer(
+            seed=self.seed ^ 0xF00DBEEF,
+            all_functions=bool(getattr(self, '_vm_all', False)),
+        )
         prelude_code, new_ast = transformer.transform(ast)
 
         vm_stats = transformer.stats
