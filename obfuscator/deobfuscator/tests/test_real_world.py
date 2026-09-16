@@ -7,7 +7,16 @@ NZL Deobfuscator - Real-World Round-Trip Test
 Это ГЛАВНОЕ ДЕМО деобфускатора v3.0.
 """
 
+import os
+import sys
 import time
+
+# прямой запуск файла (без -m): sys.path[0] = каталог tests/, поэтому
+# явно добавляем корень репозитория
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+
 from obfuscator.engine import obfuscate
 from obfuscator.deobfuscator.engine import DeobfuscatorEngine
 

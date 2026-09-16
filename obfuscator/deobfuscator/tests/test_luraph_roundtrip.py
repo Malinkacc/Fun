@@ -14,6 +14,12 @@ T4  medium через full-пайплайн с новой стадией: no-op,
 import os
 import sys
 
+# прямой запуск файла (без -m): sys.path[0] = каталог tests/, поэтому
+# явно добавляем корень репозитория
+_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
+
 PASSED = 0
 FAILED = 0
 
