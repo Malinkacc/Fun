@@ -29,6 +29,7 @@ from obfuscator.deobfuscator.decoders.state_machine_unflattener import StateMach
 from obfuscator.deobfuscator.decoders.name_normalizer import NameNormalizer
 from obfuscator.deobfuscator.decoders.base_decoder import DecoderStats
 from obfuscator.deobfuscator.decoders.vm_devirtualizer import VMDevirtualizerDecoder
+from obfuscator.deobfuscator.decoders.luraph_decoder import LuraphDecoder
 
 
 @dataclass
@@ -188,6 +189,7 @@ class DeobfuscatorEngine:
             stages.append(("nzl wrapper strip", NZLWrapperStripper()))
             stages.append(("constant fold #3", ConstantFoldDecoder()))
             stages.append(("name normalize", NameNormalizer()))
+            stages.append(("luraph deep", LuraphDecoder()))
         
         return stages
     
