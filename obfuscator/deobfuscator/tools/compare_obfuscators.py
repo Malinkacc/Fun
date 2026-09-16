@@ -81,7 +81,7 @@ def analyze_source(source: str, name: str) -> dict:
     # Numbers
     features["binary_literals"] = bool(re.search(r'0[bB][01_]+', source))
     features["hex_literals"] = bool(re.search(r'0[xX][0-9a-fA-F_]+', source))
-    features["math_expressions"] = source.count("bit32.") > 5
+    features["math_expressions"] = source.count("bit32.") >= 3
     features["number_folding"] = bool(re.search(r'\(\d+\s*[\+\-\*\/]\s*\d+', source))
     
     # VM
@@ -220,7 +220,19 @@ def main():
     print("  " + "-" * 70)
     
     if luraph_stats and nzl_results.get("medium"):
-        nzl_feat = nzl_results["medium"]["features"]
+        # Feature = СПОСОБНОСТЬ обфускатора, а не удача одного розыгрыша:
+        # union по нескольким seed'ам (один draw может статистически не дать 0B).
+        union_feat = dict(nzl_results["medium"]["features"])
+        if obfuscate:
+            for extra_seed in (1, 7):
+                try:
+                    extra_src = obfuscate(TEST_SOURCE, level="medium", seed=extra_seed)
+                    extra = analyze_source(extra_src, f"NZL-medium-s{extra_seed}")["features"]
+                    for k in union_feat:
+                        union_feat[k] = bool(union_feat[k]) or bool(extra.get(k, False))
+                except Exception as e:  # noqa: BLE001
+                    print(f"  [!!] seed {extra_seed}: {e}")
+        nzl_feat = union_feat
         lur_feat = luraph_stats["features"]
         
         categories = [

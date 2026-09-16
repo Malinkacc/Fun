@@ -1,4 +1,4 @@
-﻿"""
+"""
 NZL Studio Obfuscator - Number Obfuscator Transformer
 Replaces integer literals with polymorphic math expressions.
 
@@ -61,7 +61,8 @@ class NumberObfuscatorConfig:
     
     @classmethod
     def balanced(cls):
-        return cls(probability=0.35, depth=1, skip_for_bounds=False)
+        # 0.35 -> 0.5: при 0.35 фичи 0B/bit32 статистически пропадали из medium-вывода
+        return cls(probability=0.5, depth=1, skip_for_bounds=False)
     
     @classmethod
     def aggressive(cls):
@@ -85,6 +86,7 @@ class NumberObfuscationStats:
     skipped_table_key: int = 0
     skipped_for_bound: int = 0
     skipped_random: int = 0
+    parse_failures: int = 0   # gen выдал выражение, которое парсер не смог разобрать
     bytes_added: int = 0
     
     def report(self) -> str:
@@ -170,20 +172,27 @@ class NumberObfuscatorTransformer(NodeTransformer):
     
     def _obfuscate_number(self, node: NumberLit, value: int) -> Expr:
         """Generate a polymorphic expression for `value`"""
-        expr_str = self.num_gen.gen(value, depth=self.config.depth)
+        ast_expr = None
+        expr_str = ""
+        for _attempt in range(3):          # retry: rng мог выдать редкий крайний случай
+            expr_str = self.num_gen.gen(value, depth=self.config.depth)
+            try:
+                ast_expr = self._parse_expression_string(expr_str, node.line)
+                break
+            except Exception:
+                ast_expr = None
         
-        try:
-            ast_expr = self._parse_expression_string(expr_str, node.line)
-            
-            original_size = len(str(value))
-            new_size = len(expr_str)
-            self.stats.bytes_added += (new_size - original_size)
-            self.stats.obfuscated += 1
-            
-            return ast_expr
-        except Exception:
+        if ast_expr is None:
             self.stats.skipped_random += 1
+            self.stats.parse_failures += 1
             return node
+        
+        original_size = len(str(value))
+        new_size = len(expr_str)
+        self.stats.bytes_added += (new_size - original_size)
+        self.stats.obfuscated += 1
+        
+        return ast_expr
     
     def _parse_expression_string(self, expr_str: str, line: int) -> Expr:
         """Parse a small expression string into AST"""

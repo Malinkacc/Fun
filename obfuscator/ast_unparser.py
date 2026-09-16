@@ -271,6 +271,17 @@ class ASTUnparser:
         return "true" if node.value else "false"
 
     def _u_NumberLit(self, node: NumberLit) -> str:
+        raw = getattr(node, 'raw', '') or ''
+        if raw:
+            prefix = raw[:2].lower()
+            digits = raw[2:].replace('_', '')
+            try:
+                if prefix == '0x' and '.' not in digits and int(digits, 16) == node.value:
+                    return raw
+                if prefix == '0b' and int(digits, 2) == node.value:
+                    return raw
+            except (ValueError, IndexError):
+                pass
         return format_number(node.value)
 
     def _u_StringLit(self, node: StringLit) -> str:

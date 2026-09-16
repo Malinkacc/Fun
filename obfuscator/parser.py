@@ -578,7 +578,7 @@ class Parser:
 
         if tok.type == TokenType.NUMBER:
             self._advance()
-            return NumberLit(line=line, value=tok.value)
+            return NumberLit(line=line, value=tok.value, raw=getattr(tok, 'raw', '') or '')
 
         if tok.type == TokenType.STRING:
             self._advance()

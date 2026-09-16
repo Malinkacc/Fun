@@ -360,13 +360,13 @@ class Lexer:
         if self._peek() == '0' and (self._peek(1) == 'x' or self._peek(1) == 'X'):
             self._advance()
             self._advance()
-            if not self._is_hex_digit(self._peek()):
+            if not (self._is_hex_digit(self._peek()) or self._peek() == '_'):
                 self._error("Invalid hex number")
-            while self._is_hex_digit(self._peek()):
+            while self._is_hex_digit(self._peek()) or self._peek() == '_':
                 self._advance()
             if self._peek() == '.':
                 self._advance()
-                while self._is_hex_digit(self._peek()):
+                while self._is_hex_digit(self._peek()) or self._peek() == '_':
                     self._advance()
             if self._peek() in 'pP':
                 self._advance()
@@ -379,9 +379,28 @@ class Lexer:
                 if '.' in raw or 'p' in raw.lower():
                     value = float.fromhex(raw)
                 else:
-                    value = int(raw, 16)
+                    value = int(raw.replace('_', ''), 16)
             except ValueError:
                 self._error(f"Invalid hex number: {raw}")
+            self._add_token(TokenType.NUMBER, value=value, raw=raw, start_line=start_line, start_col=start_col)
+            return
+        
+        # Бинарные литералы: 0b101 / 0B10_00 (Luraph v14 их эммитит!)
+        if self._peek() == '0' and (self._peek(1) == 'b' or self._peek(1) == 'B'):
+            self._advance()
+            self._advance()
+            if self._peek() not in '01_':
+                self._error("Invalid binary number")
+            while self._peek() in '01_':
+                self._advance()
+            raw = self.source[start:self.pos]
+            digits = raw[2:].replace('_', '')
+            if not digits:
+                self._error(f"Invalid binary number: {raw}")
+            try:
+                value = int(digits, 2)
+            except ValueError:
+                self._error(f"Invalid binary number: {raw}")
             self._add_token(TokenType.NUMBER, value=value, raw=raw, start_line=start_line, start_col=start_col)
             return
         

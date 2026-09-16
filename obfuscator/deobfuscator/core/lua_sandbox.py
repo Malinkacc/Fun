@@ -172,7 +172,24 @@ class LuaSandbox:
         b.rawset('lshift', lambda args: (int(args[0]) << int(args[1])) & 0xFFFFFFFF if len(args)>=2 else 0)
         b.rawset('rshift', lambda args: (int(args[0]) & 0xFFFFFFFF) >> int(args[1]) if len(args)>=2 else 0)
         b.rawset('arshift', lambda args: int(args[0]) >> int(args[1]) if len(args)>=2 else 0)
+        b.rawset('rrotate', lambda args: self._rot32(int(args[0]), -int(args[1])) if len(args)>=2 else 0)
+        b.rawset('lrotate', lambda args: self._rot32(int(args[0]), int(args[1])) if len(args)>=2 else 0)
+        b.rawset('extract', lambda args: self._extract(args))
         return b
+
+    def _rot32(self, x, n):
+        x &= 0xFFFFFFFF
+        n %= 32
+        return ((x << n) | (x >> (32 - n))) & 0xFFFFFFFF
+
+    def _extract(self, args):
+        if len(args) < 2: return 0
+        x = int(args[0]) & 0xFFFFFFFF
+        field = int(args[1])
+        width = int(args[2]) if len(args) > 2 else 1
+        field = max(0, min(31, field))
+        width = max(1, min(32 - field, width))
+        return (x >> field) & ((1 << width) - 1)
 
     def _band(self, args):
         r = 0xFFFFFFFF
@@ -886,7 +903,10 @@ class LuaSandbox:
         elif cls == 'FunctionExpr':
             return self._make_lua_function(node, env)
         elif cls in ('ParenExpr', 'Paren'):
-            inner = self._eval(getattr(node, 'expr', None), env)
+            inner_node = getattr(node, 'inner', None)
+            if inner_node is None:
+                inner_node = getattr(node, 'expr', None)
+            inner = self._eval(inner_node, env)
             if isinstance(inner, list):
                 return inner[0] if inner else None
             return inner
@@ -1022,7 +1042,11 @@ class LuaSandbox:
         if op == '*': return l * r
         if op == '/': return l / r if r != 0 else math.inf
         if op == '//': return math.floor(l / r) if r != 0 else 0
-        if op == '%': return math.fmod(l, r) if r != 0 else 0
+        if op == '%':
+            # Lua: a % b == a - floor(a/b)*b ; для int-ов результат int
+            if r == 0: return 0
+            v = l - math.floor(l / r) * r
+            return int(v) if isinstance(l, int) and isinstance(r, int) else v
         if op == '^': return l ** r
 
         if op == '&': return int(l) & int(r)
@@ -1169,7 +1193,7 @@ local function ksa(key)
     return s[1]
 end
 result = ksa("key")
-''', 255)
+''', 107)   # истинный Lua-результат KSA для key="key" (прежде 255 проходило лишь из-за битого ParenExpr)
 
     print(f'\n{"="*40}')
     print(f'✅ Passed: {passed}/13')

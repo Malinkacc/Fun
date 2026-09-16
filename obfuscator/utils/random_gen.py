@@ -138,7 +138,7 @@ class NumberExprGen:
         if not isinstance(value, int):
             return str(value)
         if abs(value) > 0xFFFFFFFF:
-            return str(value)
+            return f"({value})" if value < 0 else str(value)
         
         methods = [
             # Arithmetic (30%)
@@ -163,36 +163,46 @@ class NumberExprGen:
         method = weighted_choice(self.rng, methods)
         
         try:
-            if method == 'addition':
-                return self._addition(value, depth)
-            elif method == 'subtraction':
-                return self._subtraction(value, depth)
-            elif method == 'multiplication':
-                return self._multiplication(value, depth)
-            elif method == 'unary_minus':
-                return self._unary_minus(value, depth)
-            elif method == 'hex_literal':
-                return self._hex_literal(value)
-            elif method == 'binary_literal':
-                return self._binary_literal(value)
-            elif method == 'bxor':
-                return self._bxor(value, depth)
-            elif method == 'rrotate':
-                return self._rrotate(value, depth)
-            elif method == 'lrotate':
-                return self._lrotate(value, depth)
-            elif method == 'lshift':
-                return self._lshift(value, depth)
-            elif method == 'rshift':
-                return self._rshift(value, depth)
-            elif method == 'band':
-                return self._band(value, depth)
-            elif method == 'bor':
-                return self._bor(value, depth)
-            elif method == 'bnot':
-                return self._bnot(value)
+            out = self._dispatch(method, value, depth)
         except Exception:
-            return str(value)
+            out = str(value)
+        # LUA GOTCHA: "--1024" — это КОММЕНТАРИЙ, а не двойной минус!
+        # Отрицательное выражение не должно начинаться с голого '-',
+        # иначе внешний unary_minus / префикс соберёт невалидный Lua.
+        if value < 0 and out.startswith('-'):
+            out = f"({out})"
+        return out
+    
+    def _dispatch(self, method: str, value: int, depth: int) -> str:
+        """Выбранная стратегия генерации выражения для value."""
+        if method == 'addition':
+            return self._addition(value, depth)
+        elif method == 'subtraction':
+            return self._subtraction(value, depth)
+        elif method == 'multiplication':
+            return self._multiplication(value, depth)
+        elif method == 'unary_minus':
+            return self._unary_minus(value, depth)
+        elif method == 'hex_literal':
+            return self._hex_literal(value)
+        elif method == 'binary_literal':
+            return self._binary_literal(value)
+        elif method == 'bxor':
+            return self._bxor(value, depth)
+        elif method == 'rrotate':
+            return self._rrotate(value, depth)
+        elif method == 'lrotate':
+            return self._lrotate(value, depth)
+        elif method == 'lshift':
+            return self._lshift(value, depth)
+        elif method == 'rshift':
+            return self._rshift(value, depth)
+        elif method == 'band':
+            return self._band(value, depth)
+        elif method == 'bor':
+            return self._bor(value, depth)
+        elif method == 'bnot':
+            return self._bnot(value)
         return str(value)
     
     def _fmt_int(self, n: int) -> str:
@@ -200,9 +210,9 @@ class NumberExprGen:
         if n < 0 or n > _MASK32:
             return str(n)
         r = self.rng.random()
-        if r < 0.40:
+        if r < 0.35:
             return f"0X{n:X}"
-        elif r < 0.65:
+        elif r < 0.70:   # binary 35% — чтобы 0B-фича стабильно присутствовала в выводе
             bits = max(4, n.bit_length())
             if bits > 32:
                 return f"0X{n:X}"

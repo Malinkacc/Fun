@@ -81,8 +81,9 @@ class BoolLit(Expr):
 
 @dataclass
 class NumberLit(Expr):
-    """Число: 123, 3.14, 0xFF"""
+    """Число: 123, 3.14, 0xFF, 0B101"""
     value: Union[int, float] = 0
+    raw: str = ""   # исходный текст литерала ("0X54", "0B101") — чтобы unparser сохранял стиль
     def __repr__(self):
         return f"Num({self.value})"
 

@@ -25,7 +25,10 @@ from obfuscator.ast_unparser import unparse
 from obfuscator.utils.random_gen import make_rng, NameGenerator
 
 from obfuscator.transformers.string_encryptor import encrypt_strings_in_chunk
-from obfuscator.transformers.number_obfuscator import obfuscate_numbers_in_chunk
+from obfuscator.transformers.number_obfuscator import (
+    obfuscate_numbers_in_chunk,
+    NumberObfuscatorConfig,
+)
 from obfuscator.transformers.variable_renamer import VariableRenamer
 from obfuscator.transformers.control_flow import ControlFlowFlattener
 
@@ -228,7 +231,7 @@ class Obfuscator:
             try:
                 ast = self._stage(
                     "NumberObfuscator",
-                    lambda: self._apply_numbers(ast)
+                    lambda: self._apply_numbers(ast, level)
                 )
             except Exception as e:
                 self._log(f"⚠️  NumberObfuscator пропущен: {e}")
@@ -330,9 +333,15 @@ class Obfuscator:
 
         return new_ast
 
-    def _apply_numbers(self, ast):
+    def _apply_numbers(self, ast, level: str = 'medium'):
+        # РАНЬШЕ: config не передавался вовсе -> всегда дефолт 0.35,
+        # пресеты balanced()/aggressive() не использовались НИКОГДА.
+        if level == 'insane':
+            cfg = NumberObfuscatorConfig.aggressive()
+        else:
+            cfg = NumberObfuscatorConfig.balanced()
         rng = make_rng(self.seed ^ 0xCAFEBABE)
-        result = obfuscate_numbers_in_chunk(ast, rng=rng)
+        result = obfuscate_numbers_in_chunk(ast, rng=rng, config=cfg)
         new_ast = result[0] if isinstance(result, tuple) else result
         return new_ast
 
