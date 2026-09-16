@@ -27,6 +27,7 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -212,6 +213,9 @@ def main(argv=None) -> int:
         print('payload: %d bytes, first 200 chars:' % len(p))
         print(p[:200])
         if a.out:
+            out_dir = os.path.dirname(os.path.abspath(a.out))
+            if out_dir and not os.path.isdir(out_dir):
+                os.makedirs(out_dir, exist_ok=True)
             with open(a.out, 'w', encoding='utf-8', newline='\n') as f:
                 f.write(p)
             print('saved -> %s' % a.out)
