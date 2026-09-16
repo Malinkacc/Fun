@@ -6,6 +6,8 @@ parser        — структурная карта образца: handlers/ali
  девиртуализация VM Luraph — Sprint 6+.)
 dynamic       — динамическое извлечение payload: прогон чанка в LuaSandbox
 с перехватом load/loadstring (расшифрованный исходник достаётся ДО вызова).
+bytecode_extract — Sprint 6: статическое извлечение байткода VM (giant
+ASCII85-блоб с заголовком LPH~ -> байткод за ~0.5 с, без интерпретации VM).
 
 Импорты ленивые (PEP 562): `py -m ...luraph.parser` не должен печатать
 runpy RuntimeWarning.
@@ -18,6 +20,8 @@ _LAZY = {
     'parse_source': '.parser',
     'DynamicExtractResult': '.dynamic',
     'extract_payload': '.dynamic',
+    'BytecodeExtractResult': '.bytecode_extract',
+    'extract_bytecode': '.bytecode_extract',
 }
 
 __all__ = list(_LAZY)
