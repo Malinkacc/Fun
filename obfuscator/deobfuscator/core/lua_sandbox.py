@@ -176,6 +176,7 @@ class LuaSandbox:
             'dofile': lambda args: None,
             'require': lambda args: None,
             'collectgarbage': lambda args: 0,
+            'coroutine': self._make_coroutine(),
             'bit32': self._make_bit32(),
         }
 
@@ -186,6 +187,73 @@ class LuaSandbox:
         if args and self._lua_truthy(args[0]):
             return args[0]
         raise LuaSandboxError('assertion failed')
+
+    @staticmethod
+    def _countlz(args) -> int:
+        x = int(args[0]) & 0xFFFFFFFF if args and args[0] is not None else 0
+        if x == 0:
+            return 32
+        n = 0
+        while not (x & 0x80000000):
+            x = (x << 1) & 0xFFFFFFFF
+            n += 1
+        return n
+
+    @staticmethod
+    def _countrz(args) -> int:
+        x = int(args[0]) & 0xFFFFFFFF if args and args[0] is not None else 0
+        if x == 0:
+            return 32
+        n = 0
+        while not (x & 1):
+            x >>= 1
+            n += 1
+        return n
+
+    def _make_coroutine(self):
+        """Минимальный coroutine-стаб: yield/create/wrap/status/resume.
+        Достаточно для защит, которые только СОХРАНЯЮТ coroutine.yield
+        или используют его как маркер среды."""
+        co = LuaTable()
+        state = {'cur': None}
+
+        def _yield(args):
+            return [None]
+
+        def _create(args):
+            fn = args[0] if args else None
+            box = {'fn': fn, 'done': False}
+            return box
+
+        def _resume(args):
+            box = args[0] if args else None
+            if not isinstance(box, dict):
+                return [False, 'bad coroutine']
+            try:
+                res = self._call_function(box['fn'], list(args[1:]),
+                                          getattr(self, '_env', None) or {})
+                box['done'] = True
+                return [True, res]
+            except Exception as e:  # noqa: BLE001
+                return [False, str(e)]
+
+        def _status(args):
+            box = args[0] if args else None
+            if isinstance(box, dict):
+                return 'dead' if box.get('done') else 'suspended'
+            return 'dead'
+
+        def _wrap(args):
+            fn = args[0] if args else None
+            return lambda a: self._call_function(fn, list(a), {})
+
+        co.rawset('yield', lambda args: _yield(args))
+        co.rawset('create', lambda args: _create(args))
+        co.rawset('resume', lambda args: _resume(args))
+        co.rawset('status', lambda args: _status(args))
+        co.rawset('wrap', lambda args: _wrap(args))
+        co.rawset('running', lambda args: state['cur'])
+        return co
 
     def _make_bit32(self):
         b = LuaTable()
@@ -199,6 +267,8 @@ class LuaSandbox:
         b.rawset('rrotate', lambda args: self._rot32(int(args[0]), -int(args[1])) if len(args)>=2 else 0)
         b.rawset('lrotate', lambda args: self._rot32(int(args[0]), int(args[1])) if len(args)>=2 else 0)
         b.rawset('extract', lambda args: self._extract(args))
+        b.rawset('countlz', lambda args: self._countlz(args))
+        b.rawset('countrz', lambda args: self._countrz(args))
         return b
 
     def _rot32(self, x, n):
@@ -479,6 +549,9 @@ class LuaSandbox:
         except LuaSandboxError:
             raise
         except Exception as e:
+            import os as _os
+            if _os.environ.get('NZL_SANDBOX_DEBUG'):
+                raise  # внутренний traceback для отладки
             raise LuaSandboxError(f'Runtime error: {type(e).__name__}: {e}')
 
         return exec_env
