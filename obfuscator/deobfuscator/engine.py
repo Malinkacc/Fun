@@ -25,6 +25,7 @@ from obfuscator.deobfuscator.decoders.constant_fold_decoder import ConstantFoldD
 from obfuscator.deobfuscator.decoders.sandbox_decoder import SandboxDecoder
 from obfuscator.deobfuscator.decoders.number_expr_decoder import NumberExprDecoder
 from obfuscator.deobfuscator.decoders.string_array_decoder import StringArrayDecoder
+from obfuscator.deobfuscator.decoders.state_machine_unflattener import StateMachineUnflattener
 from obfuscator.deobfuscator.decoders.base_decoder import DecoderStats
 
 
@@ -161,12 +162,14 @@ class DeobfuscatorEngine:
             stages.append(("string.char fold", StringCharDecoder()))
             stages.append(("constant fold #1", ConstantFoldDecoder()))
             stages.append(("number expr fold #1", NumberExprDecoder()))
+            stages.append(("state machine unflatten #1", StateMachineUnflattener()))
             stages.append(("string array inline #1", StringArrayDecoder()))
         
         if self.level in ("full", "vm"):
             stages.append(("sandbox decoder",  SandboxDecoder(verbose=self.verbose)))
             stages.append(("constant fold #2", ConstantFoldDecoder()))
             stages.append(("number expr fold #2", NumberExprDecoder()))
+            stages.append(("state machine unflatten #2", StateMachineUnflattener()))
             stages.append(("string array inline #2", StringArrayDecoder()))
             stages.append(("string.char fold #2", StringCharDecoder()))
             stages.append(("nzl wrapper strip", NZLWrapperStripper()))

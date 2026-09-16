@@ -56,6 +56,7 @@ LEVELS = ('medium', 'hard', 'insane')
 
 DEFAULT_MEDIUM_CONFIG = {
     'string_array': True,
+    'state_machine': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -69,6 +70,7 @@ DEFAULT_MEDIUM_CONFIG = {
 
 DEFAULT_HARD_CONFIG = {
     'string_array': True,
+    'state_machine': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -83,6 +85,7 @@ DEFAULT_HARD_CONFIG = {
 # 🔥 INSANE: полный pipeline с VM
 DEFAULT_INSANE_CONFIG = {
     'string_array': True,
+    'state_machine': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -239,6 +242,15 @@ class Obfuscator:
             except Exception as e:
                 self._log(f"⚠️  StringEncryptor пропущен: {e}")
 
+        if config.get('state_machine'):
+            try:
+                ast = self._stage(
+                    "StateMachine",
+                    lambda: self._apply_state_machine(ast)
+                )
+            except Exception as e:
+                self._log(f"⚠️  StateMachine пропущен: {e}")
+
         if config['numbers']:
             try:
                 ast = self._stage(
@@ -351,6 +363,15 @@ class Obfuscator:
         )
         rng = make_rng(self.seed ^ 0x5A17A7)
         result = obfuscate_string_array(ast, rng=rng, config=StringArrayConfig.balanced())
+        new_ast = result[0] if isinstance(result, tuple) else result
+        return new_ast
+
+    def _apply_state_machine(self, ast):
+        from obfuscator.transformers.state_machine import (
+            StateMachineConfig, obfuscate_state_machine,
+        )
+        rng = make_rng(self.seed ^ 0x57A7E)
+        result = obfuscate_state_machine(ast, rng=rng, config=StateMachineConfig.balanced())
         new_ast = result[0] if isinstance(result, tuple) else result
         return new_ast
 
