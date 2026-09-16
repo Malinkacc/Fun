@@ -22,6 +22,8 @@ _LAZY = {
     'extract_payload': '.dynamic',
     'BytecodeExtractResult': '.bytecode_extract',
     'extract_bytecode': '.bytecode_extract',
+    'BytecodeParseResult': '.bytecode_parse',
+    'parse_bytecode': '.bytecode_parse',
 }
 
 __all__ = list(_LAZY)
