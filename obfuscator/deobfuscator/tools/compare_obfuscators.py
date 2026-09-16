@@ -52,8 +52,11 @@ def analyze_source(source: str, name: str) -> dict:
         re.search(r'bit32\.bxor.*string\.byte', source)
     )
     features["string_array_indexing"] = bool(
-        re.search(r'local\s+\w+\s*=\s*\{\s*[\'"]', source) and
-        re.search(r'\w+\[\d+\]', source)
+        # таблица строк (Luraph) ИЛИ таблица decrypt-вызовов (NZL шифрует элементы)
+        (re.search(r'local\s+\w+\s*=\s*\{\s*[\'"]', source) or
+         re.search(r'local\s+\w+\s*=\s*\{\s*\w+\(', source)) and
+        # индексация литералом ИЛИ свёрнутым выражением
+        re.search(r'\w+\s*\[\s*[\d(]', source)
     )
     features["non_ascii_bytes"] = any(ord(c) > 127 for c in source[:5000])
     features["raw_byte_strings"] = bool(re.search(r'\\\d{3}', source))

@@ -49,6 +49,7 @@ class NumberObfuscatorConfig:
     min_value: int = -1_000_000
     skip_table_keys: bool = True
     skip_for_bounds: bool = False
+    skip_array_index: bool = False   # Sprint 2: беречь индексы name-массивов (_L[1])
     handle_float_integers: bool = False
     
     def __post_init__(self):
@@ -62,7 +63,8 @@ class NumberObfuscatorConfig:
     @classmethod
     def balanced(cls):
         # 0.35 -> 0.5: при 0.35 фичи 0B/bit32 статистически пропадали из medium-вывода
-        return cls(probability=0.5, depth=1, skip_for_bounds=False)
+        # skip_array_index: бережём _L[1] от превращения в _L[(0X1+0)] (Sprint 2)
+        return cls(probability=0.5, depth=1, skip_for_bounds=False, skip_array_index=True)
     
     @classmethod
     def aggressive(cls):
@@ -259,9 +261,18 @@ class NumberObfuscatorTransformer(NodeTransformer):
         return node
     
     def visit_IndexExpr(self, node: IndexExpr) -> Expr:
-        """Table index access: t[key] — obfuscate normally"""
+        """Table index access: t[key] — obfuscate normally,
+        НО при skip_array_index индексы у простых name-массивов не трогаем:
+        это защищает string-array фичу (Sprint 2) от саморазрушения —
+        `_L[1]` не превращается в `_L[(0X1+0)]`."""
         node.obj = self.visit(node.obj)
-        node.index = self.visit(node.index)
+        skip = (
+            self.config.skip_array_index
+            and not node.is_dot
+            and isinstance(node.obj, NameExpr)
+        )
+        if not skip:
+            node.index = self.visit(node.index)
         return node
 
 

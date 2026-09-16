@@ -55,6 +55,7 @@ except ImportError:
 LEVELS = ('medium', 'hard', 'insane')
 
 DEFAULT_MEDIUM_CONFIG = {
+    'string_array': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -67,6 +68,7 @@ DEFAULT_MEDIUM_CONFIG = {
 }
 
 DEFAULT_HARD_CONFIG = {
+    'string_array': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -80,6 +82,7 @@ DEFAULT_HARD_CONFIG = {
 
 # 🔥 INSANE: полный pipeline с VM
 DEFAULT_INSANE_CONFIG = {
+    'string_array': True,
     'strings': True,
     'numbers': True,
     'variables': True,
@@ -218,6 +221,15 @@ class Obfuscator:
                 if self.verbose:
                     traceback.print_exc()
 
+        if config.get('string_array'):
+            try:
+                ast = self._stage(
+                    "StringArray",
+                    lambda: self._apply_string_array(ast)
+                )
+            except Exception as e:
+                self._log(f"⚠️  StringArray пропущен: {e}")
+
         if config['strings']:
             try:
                 ast = self._stage(
@@ -331,6 +343,15 @@ class Obfuscator:
         if decryptor_code:
             self._extra_prelude.append(("string_decryptor", decryptor_code))
 
+        return new_ast
+
+    def _apply_string_array(self, ast):
+        from obfuscator.transformers.string_array import (
+            StringArrayConfig, obfuscate_string_array,
+        )
+        rng = make_rng(self.seed ^ 0x5A17A7)
+        result = obfuscate_string_array(ast, rng=rng, config=StringArrayConfig.balanced())
+        new_ast = result[0] if isinstance(result, tuple) else result
         return new_ast
 
     def _apply_numbers(self, ast, level: str = 'medium'):
