@@ -4,6 +4,8 @@ NZL STUDIO - Sprint 5: парсер/декодеры формата Luraph v14.x
 parser        — структурная карта образца: handlers/aliases/dispatcher
 (decoders/luraph_decoder использует карту для deep-проходов;
  девиртуализация VM Luraph — Sprint 6+.)
+dynamic       — динамическое извлечение payload: прогон чанка в LuaSandbox
+с перехватом load/loadstring (расшифрованный исходник достаётся ДО вызова).
 
 Импорты ленивые (PEP 562): `py -m ...luraph.parser` не должен печатать
 runpy RuntimeWarning.
@@ -14,6 +16,8 @@ _LAZY = {
     'detect_source': '.parser',
     'parse_chunk': '.parser',
     'parse_source': '.parser',
+    'DynamicExtractResult': '.dynamic',
+    'extract_payload': '.dynamic',
 }
 
 __all__ = list(_LAZY)
