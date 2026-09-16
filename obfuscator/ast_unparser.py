@@ -1,4 +1,4 @@
-"""
+r"""
 NZL Studio Obfuscator — AST Unparser
 Преобразует AST обратно в валидный Lua/Luau код.
 
@@ -74,7 +74,7 @@ def _decimal_escape(code: int) -> str:
 
 
 def _escape_raw_byte_string(s: RawByteString, prefer_quote: str = '"') -> str:
-    """
+    r"""
     Для зашифрованных payload'ов:
     - это именно байты 0..255
     - non-printable и >=128 всегда пишем как \ddd
