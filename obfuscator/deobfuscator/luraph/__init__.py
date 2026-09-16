@@ -24,6 +24,8 @@ _LAZY = {
     'extract_bytecode': '.bytecode_extract',
     'BytecodeParseResult': '.bytecode_parse',
     'parse_bytecode': '.bytecode_parse',
+    'TraceResult': '.vm_trace',
+    'trace_vm': '.vm_trace',
 }
 
 __all__ = list(_LAZY)
