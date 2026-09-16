@@ -28,6 +28,7 @@ from obfuscator.deobfuscator.decoders.string_array_decoder import StringArrayDec
 from obfuscator.deobfuscator.decoders.state_machine_unflattener import StateMachineUnflattener
 from obfuscator.deobfuscator.decoders.name_normalizer import NameNormalizer
 from obfuscator.deobfuscator.decoders.base_decoder import DecoderStats
+from obfuscator.deobfuscator.decoders.vm_devirtualizer import VMDevirtualizerDecoder
 
 
 @dataclass
@@ -101,6 +102,12 @@ class DeobfuscatorEngine:
         # 1) Парсим
         try:
             chunk = parse_code(source)
+            # Sprint 4b: vm-devirtualizer восстанавливает op-map по
+            # ИСХОДНОМУ тексту runtime (unparse ломает регулярки)
+            try:
+                setattr(chunk, 'raw_source', source)
+            except Exception:
+                pass
         except Exception as e:
             result.parse_error = f"{type(e).__name__}: {e}"
             result.total_time_ms = (time.perf_counter() - t0) * 1000
@@ -159,6 +166,11 @@ class DeobfuscatorEngine:
         from .decoders.nzl_wrapper_stripper import NZLWrapperStripper
         stages: list[tuple[str, object]] = []
         
+        if self.level == "vm":
+            # Sprint 4b: сперва откатываем собственный VM,
+            # пока unflattener/folders не искалечили его AST
+            stages.append(("vm devirtualizer", VMDevirtualizerDecoder()))
+        
         if self.level in ("basic", "full", "vm"):
             stages.append(("string.char fold", StringCharDecoder()))
             stages.append(("constant fold #1", ConstantFoldDecoder()))
@@ -176,9 +188,6 @@ class DeobfuscatorEngine:
             stages.append(("nzl wrapper strip", NZLWrapperStripper()))
             stages.append(("constant fold #3", ConstantFoldDecoder()))
             stages.append(("name normalize", NameNormalizer()))
-        
-        if self.level == "vm":
-            pass  # TODO: vm_devirtualizer
         
         return stages
     
