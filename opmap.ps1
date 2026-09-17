@@ -156,6 +156,14 @@ $c21 = $LASTEXITCODE
 $o21 | Select-Object -Last 2
 if ($c21 -ne 0) { $fail = 1; Write-Host "[XX] msvm_lift self-test FAILED"; $o21 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_lift self-test passed" }
 
+Write-Host ""
+Write-Host "== STEP 22: moonsec msvm_dispatch self-test (VM dispatch extractor, expect 6/6)"
+$o22 = py -m obfuscator.deobfuscator.moonsec.msvm_dispatch --test 2>&1
+$c22 = $LASTEXITCODE
+$o22 | Select-Object -Last 2
+if ($c22 -ne 0) { $fail = 1; Write-Host "[XX] msvm_dispatch self-test FAILED"; $o22 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_dispatch self-test passed" }
+
+
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
