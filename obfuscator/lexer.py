@@ -491,6 +491,21 @@ class Lexer:
                     self._advance()
                     while self._peek() in ' \t\n\r':
                         self._advance()
+                elif escaped == 'u':
+                    self._advance()
+                    if self._peek() == '{':
+                        self._advance()
+                        hex_str = ''
+                        while not self._is_at_end() and self._peek() != '}':
+                            hex_str += self._advance()
+                        if not self._is_at_end():
+                            self._advance()
+                        try:
+                            result.append(chr(int(hex_str, 16)))
+                        except Exception:
+                            result.append('')
+                    else:
+                        result.append('\\u')
                 elif self._is_digit(escaped):
                     num_str = ''
                     for _ in range(3):
@@ -504,7 +519,9 @@ class Lexer:
                             self._error(f"Decimal escape too large: {n}")
                         result.append(chr(n))
                 else:
-                    result.append('\\' + escaped)
+                    # Luau-семантика: неизвестный экранирующий символ -> сам символ
+                    # ("\!" -> "!", "\." -> "."); важно для Luraph-паттернов gsub
+                    result.append(escaped if escaped is not None else '')
                     self._advance()
             else:
                 result.append(c)

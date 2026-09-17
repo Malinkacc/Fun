@@ -29,6 +29,7 @@ class LuaTable:
     def __init__(self):
         self._hash = {}
         self._array = []
+        self.metatable = None
 
     def rawget(self, key):
         if isinstance(key, bool):
@@ -126,13 +127,25 @@ class LuaSandbox:
         string_lib.rawset('upper', lambda args: args[0].upper() if args else '')
         string_lib.rawset('format', lambda args: self._str_format(args))
         string_lib.rawset('find', lambda args: self._str_find(args))
-        string_lib.rawset('gmatch', lambda args: None)
-        string_lib.rawset('gsub', lambda args: None)
+        string_lib.rawset('gmatch', lambda args: self._str_gmatch(args))
+        string_lib.rawset('gsub', lambda args: self._str_gsub(args))
+        string_lib.rawset('match', lambda args: self._str_match(args))
+        string_lib.rawset('pack', lambda args: self._str_pack(args))
+        string_lib.rawset('unpack', lambda args: self._str_unpack(args))
+        string_lib.rawset('packsize', lambda args: self._str_packsize(args))
+        string_lib.rawset('split', lambda args: self._str_split(args))
 
         table_lib = LuaTable()
         table_lib.rawset('concat', lambda args: self._tbl_concat(args))
         table_lib.rawset('insert', lambda args: self._tbl_insert(args))
         table_lib.rawset('remove', lambda args: self._tbl_remove(args))
+        table_lib.rawset('create', lambda args: self._tbl_create(args))
+        table_lib.rawset('clear', lambda args: self._tbl_clear(args))
+        table_lib.rawset('find', lambda args: self._tbl_find(args))
+        table_lib.rawset('pack', lambda args: self._tbl_pack(args))
+        table_lib.rawset('unpack', lambda args: self._unpack(args))
+        table_lib.rawset('move', lambda args: self._tbl_move(args))
+        table_lib.rawset('sort', lambda args: self._tbl_sort(args))
 
         math_lib = LuaTable()
         math_lib.rawset('floor', lambda args: math.floor(args[0]) if args else 0)
@@ -162,8 +175,9 @@ class LuaSandbox:
             'select': lambda args: self._select(args),
             'rawget': lambda args: args[0].rawget(args[1]) if len(args)>=2 and isinstance(args[0], LuaTable) else None,
             'rawset': lambda args: self._rawset(args),
-            'setmetatable': lambda args: args[0] if args else None,
-            'getmetatable': lambda args: None,
+            'setmetatable': lambda args: self._setmetatable(args),
+            'getmetatable': lambda args: self._getmetatable(args),
+            'rawlen': lambda args: (args[0].length() if isinstance(args[0], LuaTable) else (len(args[0]) if isinstance(args[0], str) else 0)) if args else 0,
             'error': lambda args: self._raise_error(args),
             'assert': lambda args: self._assert(args),
             'pcall': lambda args: self._pcall(args),
@@ -378,17 +392,711 @@ class LuaSandbox:
         except Exception:
             return fmt
 
-    def _str_find(self, args):
-        if len(args) < 2: return None
-        s, pat = args[0], args[1]
-        plain = args[3] if len(args) > 3 else False
-        if plain:
-            idx = s.find(pat)
-            if idx == -1: return None
-            return [idx+1, idx+len(pat)]
+    # ─── Lua patterns ─────────────────────────────────────────────────
+
+    def _lp_charclass(self, c, d):
+        o = ord(c) if c else 0
+        ascii_c = o < 128
+        if d == 'a': return ascii_c and c.isalpha()
+        if d == 'A': return not (ascii_c and c.isalpha())
+        if d == 'c': return o < 32 or o == 127
+        if d == 'C': return not (o < 32 or o == 127)
+        if d == 'd': return ascii_c and c.isdigit()
+        if d == 'D': return not (ascii_c and c.isdigit())
+        if d == 'l': return ascii_c and c.islower()
+        if d == 'L': return not (ascii_c and c.islower())
+        if d == 'p': return ascii_c and (not c.isalnum()) and c != ' '
+        if d == 'P': return not (ascii_c and (not c.isalnum()) and c != ' ')
+        if d == 's': return c in ' \t\n\r\f\v'
+        if d == 'S': return c not in ' \t\n\r\f\v'
+        if d == 'u': return ascii_c and c.isupper()
+        if d == 'U': return not (ascii_c and c.isupper())
+        if d == 'w': return ascii_c and c.isalnum()
+        if d == 'W': return not (ascii_c and c.isalnum())
+        if d == 'x': return c in '0123456789abcdefABCDEF'
+        if d == 'X': return c not in '0123456789abcdefABCDEF'
+        if d == 'g': return 33 <= o <= 126
+        if d == 'G': return not (33 <= o <= 126)
+        return c == d
+
+    def _lp_setend(self, pat, pi):
+        j = pi + 1
+        if j < len(pat) and pat[j] == '^':
+            j += 1
+        if j < len(pat) and pat[j] == ']':
+            j += 1
+        while j < len(pat):
+            if pat[j] == '%':
+                j += 2
+                continue
+            if pat[j] == ']':
+                return j
+            j += 1
+        return len(pat)
+
+    def _lp_setmatch(self, c, pat, pi, endp):
+        neg = False
+        j = pi + 1
+        if j < endp and pat[j] == '^':
+            neg = True
+            j += 1
+        found = False
+        first = True
+        while j < endp:
+            if first and pat[j] == ']':
+                if c == ']':
+                    found = True
+                    break
+                j += 1
+                first = False
+                continue
+            first = False
+            if pat[j] == '%' and j + 1 < endp:
+                if self._lp_charclass(c, pat[j + 1]):
+                    found = True
+                    break
+                j += 2
+                continue
+            lo = pat[j]
+            j += 1
+            if j + 1 <= endp - 1 and pat[j] == '-':
+                if pat[j + 1] == '%' and j + 2 < endp:
+                    hi = pat[j + 2]
+                    j += 3
+                else:
+                    hi = pat[j + 1]
+                    j += 2
+                if lo <= c <= hi:
+                    found = True
+                    break
+            else:
+                if c == lo:
+                    found = True
+                    break
+        return (not found) if neg else found
+
+    def _lp_itemlen(self, pat, pi):
+        ch = pat[pi]
+        if ch == '%':
+            return 2
+        if ch == '[':
+            return self._lp_setend(pat, pi) - pi + 1
+        return 1
+
+    def _lp_classmatch1(self, s, si, pat, pi):
+        if si >= len(s):
+            return False
+        ch = pat[pi]
+        if ch == '.':
+            return True
+        if ch == '%':
+            if pi + 1 >= len(pat):
+                return False
+            d = pat[pi + 1]
+            if d.isdigit():
+                return False
+            return self._lp_charclass(s[si], d)
+        if ch == '[':
+            return self._lp_setmatch(s[si], pat, pi, self._lp_setend(pat, pi))
+        return s[si] == ch
+
+    def _lp_match(self, s, si, pat, pi, caps):
+        while True:
+            if pi >= len(pat):
+                return (si, caps)
+            ch = pat[pi]
+            if ch == '(':
+                if pat[pi + 1:pi + 2] == ')':
+                    return self._lp_match(s, si, pat, pi + 2, caps + [('pos', si)])
+                return self._lp_match(s, si, pat, pi + 1, caps + [[si, None]])
+            if ch == ')':
+                idx = -1
+                for k in range(len(caps) - 1, -1, -1):
+                    cc = caps[k]
+                    if isinstance(cc, list) and cc[1] is None:
+                        idx = k
+                        break
+                if idx < 0:
+                    raise LuaSandboxError('invalid pattern capture')
+                caps = list(caps)
+                caps[idx] = [caps[idx][0], si]
+                pi += 1
+                continue
+            if ch == '$' and pi + 1 >= len(pat):
+                return (si, caps) if si == len(s) else None
+            if ch == '%' and pi + 1 < len(pat):
+                d = pat[pi + 1]
+                if d == 'b':
+                    if pi + 3 >= len(pat):
+                        return None
+                    b1, b2 = pat[pi + 2], pat[pi + 3]
+                    if si >= len(s) or s[si] != b1:
+                        return None
+                    depth = 0
+                    k = si
+                    while k < len(s):
+                        if s[k] == b1:
+                            depth += 1
+                        elif s[k] == b2:
+                            depth -= 1
+                            if depth == 0:
+                                return self._lp_match(s, k + 1, pat, pi + 4, caps)
+                        k += 1
+                    return None
+                if d.isdigit():
+                    n = int(d)
+                    if n - 1 >= len(caps):
+                        return None
+                    cc = caps[n - 1]
+                    if not isinstance(cc, list) or cc[1] is None:
+                        return None
+                    txt = s[cc[0]:cc[1]]
+                    if txt and s.startswith(txt, si):
+                        return self._lp_match(s, si + len(txt), pat, pi + 2, caps)
+                    return None
+            clen = self._lp_itemlen(pat, pi)
+            q = pat[pi + clen] if pi + clen < len(pat) else ''
+            if q == '*':
+                k = si
+                while k < len(s) and self._lp_classmatch1(s, k, pat, pi):
+                    k += 1
+                while k >= si:
+                    r = self._lp_match(s, k, pat, pi + clen + 1, caps)
+                    if r is not None:
+                        return r
+                    k -= 1
+                return None
+            if q == '+':
+                if not self._lp_classmatch1(s, si, pat, pi):
+                    return None
+                k = si + 1
+                while k < len(s) and self._lp_classmatch1(s, k, pat, pi):
+                    k += 1
+                while k >= si + 1:
+                    r = self._lp_match(s, k, pat, pi + clen + 1, caps)
+                    if r is not None:
+                        return r
+                    k -= 1
+                return None
+            if q == '-':
+                k = si
+                while True:
+                    r = self._lp_match(s, k, pat, pi + clen + 1, caps)
+                    if r is not None:
+                        return r
+                    if k < len(s) and self._lp_classmatch1(s, k, pat, pi):
+                        k += 1
+                    else:
+                        return None
+            if q == '?':
+                if self._lp_classmatch1(s, si, pat, pi):
+                    r = self._lp_match(s, si + 1, pat, pi + clen + 1, caps)
+                    if r is not None:
+                        return r
+                return self._lp_match(s, si, pat, pi + clen + 1, caps)
+            if self._lp_classmatch1(s, si, pat, pi):
+                si += 1
+                pi += clen
+                continue
+            return None
+
+    def _lp_find(self, s, pat, init=1):
+        if not isinstance(s, str):
+            s = self._tostring(s)
+        if not isinstance(pat, str):
+            pat = self._tostring(pat)
+        anchor = pat.startswith('^')
+        p0 = 1 if anchor else 0
+        si = max(0, int(init) - 1)
+        while si <= len(s):
+            r = self._lp_match(s, si, pat, p0, [])
+            if r is not None:
+                return (si, r[0], r[1])
+            if anchor:
+                return None
+            si += 1
         return None
 
+    def _lp_scan(self, s, pat, p0, si):
+        """Ближайшее совпадение паттерна на позиции >= si (find-семантика)."""
+        anchor = p0 > 0
+        while si <= len(s):
+            r = self._lp_match(s, si, pat, p0, [])
+            if r is not None:
+                return (si, r[0], r[1])
+            if anchor:
+                return None
+            si += 1
+        return None
+
+    def _lp_capargs(self, s, caps, si, endi):
+        if not caps:
+            return [s[si:endi]]
+        out = []
+        for c in caps:
+            if isinstance(c, tuple):
+                out.append(c[1] + 1)
+            else:
+                e = c[1] if c[1] is not None else len(s)
+                out.append(s[c[0]:e])
+        return out
+
+    def _lp_expand(self, repl, s, si, endi, caps):
+        out = []
+        i = 0
+        while i < len(repl):
+            c = repl[i]
+            if c == '%' and i + 1 < len(repl):
+                d = repl[i + 1]
+                if d == '%':
+                    out.append('%')
+                    i += 2
+                    continue
+                if d.isdigit():
+                    n = int(d)
+                    if n == 0:
+                        out.append(s[si:endi])
+                    elif n - 1 < len(caps):
+                        cc = caps[n - 1]
+                        if isinstance(cc, tuple):
+                            out.append(str(cc[1] + 1))
+                        else:
+                            e = cc[1] if cc[1] is not None else len(s)
+                            out.append(s[cc[0]:e])
+                    i += 2
+                    continue
+            out.append(c)
+            i += 1
+        return ''.join(out)
+
+    def _str_find(self, args):
+        if len(args) < 2: return None
+        s = args[0]; pat = args[1]
+        if not isinstance(s, str): s = self._tostring(s)
+        if not isinstance(pat, str): pat = self._tostring(pat)
+        init = args[2] if len(args) > 2 and args[2] is not None else 1
+        plain = args[3] if len(args) > 3 else False
+        if plain:
+            idx = s.find(pat, max(0, int(init) - 1))
+            if idx == -1: return None
+            return [idx + 1, idx + len(pat)]
+        r = self._lp_find(s, pat, init)
+        if r is None: return None
+        si, endi, caps = r
+        out = [si + 1, endi]
+        for c in caps:
+            if isinstance(c, tuple):
+                out.append(c[1] + 1)
+            else:
+                e = c[1] if c[1] is not None else len(s)
+                out.append(s[c[0]:e])
+        return out
+
+    def _str_match(self, args):
+        if len(args) < 2: return None
+        s = args[0]; pat = args[1]
+        init = args[2] if len(args) > 2 and args[2] is not None else 1
+        r = self._lp_find(s, pat, init)
+        if r is None: return None
+        si, endi, caps = r
+        if not isinstance(s, str): s = self._tostring(s)
+        vals = self._lp_capargs(s, caps, si, endi)
+        return vals[0] if len(vals) == 1 else vals
+
+    def _str_gmatch(self, args):
+        if len(args) < 2: return None
+        s = args[0]; pat = args[1]
+        if not isinstance(s, str): s = self._tostring(s)
+        if not isinstance(pat, str): pat = self._tostring(pat)
+        p0 = 1 if pat.startswith('^') else 0
+        state = [0]
+        def _nxt(_a):
+            r = self._lp_scan(s, pat, p0, state[0])
+            if r is None:
+                return None
+            si, endi, caps = r
+            state[0] = endi if endi > si else si + 1
+            return self._lp_capargs(s, caps, si, endi)
+        return _nxt
+
+    def _str_gsub(self, args):
+        if len(args) < 3: return None
+        s = args[0]
+        if not isinstance(s, str): s = self._tostring(s)
+        pat = args[1]
+        if not isinstance(pat, str): pat = self._tostring(pat)
+        repl = args[2]
+        nmax = None
+        if len(args) > 3 and args[3] is not None:
+            try: nmax = int(args[3])
+            except Exception: nmax = None
+        anchor = pat.startswith('^')
+        p0 = 1 if anchor else 0
+        res = []
+        last = 0
+        si = 0
+        count = 0
+        while si <= len(s) and (nmax is None or count < nmax):
+            r = self._lp_scan(s, pat, p0, si)
+            if r is None:
+                break
+            msi, endi, caps = r
+            if endi < msi:
+                break
+            si = msi
+            key_vals = self._lp_capargs(s, caps, si, endi)
+            key = key_vals[0]
+            rep = None
+            if isinstance(repl, str):
+                rep = self._lp_expand(repl, s, si, endi, caps)
+            elif isinstance(repl, LuaTable):
+                v = self._tbl_meta_get(repl, key)
+                if isinstance(v, list): v = v[0] if v else None
+                if v is not None and v is not False:
+                    rep = self._tostring(v)
+            elif isinstance(repl, LuaFunction) or callable(repl):
+                v = self._call_function(repl, key_vals)
+                if isinstance(v, list): v = v[0] if v else None
+                if v is not None and v is not False:
+                    rep = self._tostring(v)
+            if rep is None:
+                rep = s[si:endi]
+            res.append(s[last:si])
+            res.append(rep)
+            last = endi
+            count += 1
+            si = endi if endi > si else si + 1
+            if anchor:
+                break
+        res.append(s[last:])
+        return [''.join(res), count]
+
+    # ─── string.pack / unpack ─────────────────────────────────────────
+
+    def _tobytes(self, v):
+        if v is None:
+            return b''
+        if isinstance(v, str):
+            return bytes(ord(ch) & 0xFF for ch in v)
+        if isinstance(v, bytes):
+            return v
+        return self._tostring(v).encode('latin-1', 'replace')
+
+    def _pack_parse(self, fmt):
+        ops = []
+        endian = '<'
+        maxalign = None
+        i = 0
+        n = len(fmt)
+        while i < n:
+            c = fmt[i]
+            if c in ' \t':
+                i += 1
+                continue
+            if c == '<':
+                endian = '<'; i += 1; continue
+            if c == '>':
+                endian = '>'; i += 1; continue
+            if c in ('=', '!'):
+                if c == '=':
+                    endian = '<'; i += 1; continue
+                j = i + 1
+                while j < n and fmt[j].isdigit():
+                    j += 1
+                maxalign = int(fmt[i + 1:j]) if j > i + 1 else 16
+                i = j
+                continue
+            if c == 'x':
+                ops.append(('pad', 1)); i += 1; continue
+            if c == 'z':
+                ops.append(('z',)); i += 1; continue
+            if c == 's':
+                j = i + 1
+                while j < n and fmt[j].isdigit():
+                    j += 1
+                sz = int(fmt[i + 1:j]) if j > i + 1 else 8
+                ops.append(('s', sz, endian)); i = j; continue
+            if c == 'c':
+                j = i + 1
+                while j < n and fmt[j].isdigit():
+                    j += 1
+                if j == i + 1:
+                    raise LuaSandboxError("string.pack: 'c' needs a size")
+                ops.append(('c', int(fmt[i + 1:j]))); i = j; continue
+            if c in 'bB':
+                ops.append(('int', 1, c == 'b', endian, maxalign))
+            elif c in 'hH':
+                ops.append(('int', 2, c == 'h', endian, maxalign))
+            elif c in 'lL':
+                ops.append(('int', 4, c == 'l', endian, maxalign))
+            elif c in 'jJ':
+                ops.append(('int', 8, c == 'j', endian, maxalign))
+            elif c == 'T':
+                ops.append(('int', 8, False, endian, maxalign))
+            elif c in 'iI':
+                j = i + 1
+                while j < n and fmt[j].isdigit():
+                    j += 1
+                sz = int(fmt[i + 1:j]) if j > i + 1 else 4
+                ops.append(('int', sz, c == 'i', endian, maxalign))
+                i = j - 1
+            elif c == 'f':
+                ops.append(('float', 4, endian, maxalign))
+            elif c in 'dn':
+                ops.append(('float', 8, endian, maxalign))
+            else:
+                raise LuaSandboxError('string.pack: unsupported format %r' % fmt)
+            i += 1
+        return ops
+
+    def _str_pack(self, args):
+        if not args: return ''
+        fmt = args[0]
+        if not isinstance(fmt, str): fmt = self._tostring(fmt)
+        import struct as _st
+        ops = self._pack_parse(fmt)
+        out = bytearray()
+        vi = 1
+        for op in ops:
+            t = op[0]
+            if t == 'pad':
+                out += b'\0' * op[1]
+                continue
+            if t in ('int', 'float'):
+                ma = op[-1]
+                if ma:
+                    a = min(op[1], ma)
+                    if a > 1:
+                        out += b'\0' * ((-len(out)) % a)
+            if t == 'int':
+                size, signed, en = op[1], op[2], op[3]
+                v = args[vi] if vi < len(args) else 0
+                vi += 1
+                iv = int(self._to_number(v)) & ((1 << (8 * size)) - 1)
+                out += iv.to_bytes(size, 'little' if en == '<' else 'big')
+            elif t == 'float':
+                size, en = op[1], op[2]
+                v = args[vi] if vi < len(args) else 0
+                vi += 1
+                fv = float(self._to_number(v))
+                code = ('<' if en == '<' else '>') + ('f' if size == 4 else 'd')
+                out += _st.pack(code, fv)
+            elif t == 'z':
+                v = args[vi] if vi < len(args) else ''
+                vi += 1
+                out += self._tobytes(v).replace(b'\0', b'') + b'\0'
+            elif t == 's':
+                size, en = op[1], op[2]
+                v = args[vi] if vi < len(args) else ''
+                vi += 1
+                b = self._tobytes(v)
+                out += len(b).to_bytes(size, 'little' if en == '<' else 'big')
+                out += b
+            elif t == 'c':
+                sz = op[1]
+                v = args[vi] if vi < len(args) else ''
+                vi += 1
+                b = self._tobytes(v)[:sz]
+                out += b + b'\0' * (sz - len(b))
+        return out.decode('latin-1')
+
+    def _str_unpack(self, args):
+        if len(args) < 2: return None
+        fmt = args[0]; s = args[1]
+        if not isinstance(fmt, str): fmt = self._tostring(fmt)
+        pos = int(args[2]) if len(args) > 2 and args[2] is not None else 1
+        import struct as _st
+        ops = self._pack_parse(fmt)
+        b = self._tobytes(s)
+        p = max(0, pos - 1)
+        vals = []
+        for op in ops:
+            t = op[0]
+            if t == 'pad':
+                p += op[1]
+                continue
+            if t in ('int', 'float'):
+                ma = op[-1]
+                if ma:
+                    a = min(op[1], ma)
+                    if a > 1:
+                        p += (-p) % a
+            if t == 'int':
+                size, signed, en = op[1], op[2], op[3]
+                if p + size > len(b):
+                    raise LuaSandboxError('string.unpack: data too short')
+                vals.append(int.from_bytes(b[p:p + size], 'little' if en == '<' else 'big', signed=signed))
+                p += size
+            elif t == 'float':
+                size, en = op[1], op[2]
+                if p + size > len(b):
+                    raise LuaSandboxError('string.unpack: data too short')
+                code = ('<' if en == '<' else '>') + ('f' if size == 4 else 'd')
+                vals.append(_st.unpack(code, b[p:p + size])[0])
+                p += size
+            elif t == 'z':
+                e = b.find(b'\0', p)
+                if e < 0:
+                    e = len(b)
+                vals.append(b[p:e].decode('latin-1'))
+                p = e + 1
+            elif t == 's':
+                size, en = op[1], op[2]
+                if p + size > len(b):
+                    raise LuaSandboxError('string.unpack: data too short')
+                ln = int.from_bytes(b[p:p + size], 'little' if en == '<' else 'big')
+                p += size
+                vals.append(b[p:p + ln].decode('latin-1'))
+                p += ln
+            elif t == 'c':
+                sz = op[1]
+                vals.append(b[p:p + sz].decode('latin-1'))
+                p += sz
+        vals.append(p + 1)
+        return vals
+
+    def _str_packsize(self, args):
+        if not args: return None
+        fmt = args[0]
+        if not isinstance(fmt, str): fmt = self._tostring(fmt)
+        ops = self._pack_parse(fmt)
+        p = 0
+        for op in ops:
+            t = op[0]
+            if t in ('z', 's'):
+                raise LuaSandboxError('string.packsize: variable-length format')
+            if t == 'pad':
+                p += op[1]
+                continue
+            if t == 'c':
+                p += op[1]
+                continue
+            size = op[1]
+            ma = op[-1]
+            if ma:
+                a = min(size, ma)
+                if a > 1:
+                    p += (-p) % a
+            p += size
+        return p
+
+    def _str_split(self, args):
+        if not args or args[0] is None: return None
+        s = args[0]
+        if not isinstance(s, str): s = self._tostring(s)
+        sep = args[1] if len(args) > 1 and isinstance(args[1], str) else ','
+        t = LuaTable()
+        t._array.extend(s.split(sep))
+        return t
+
+    # ─── metatables ───────────────────────────────────────────────────
+
+    def _setmetatable(self, args):
+        if args and isinstance(args[0], LuaTable):
+            mt = args[1] if len(args) > 1 else None
+            args[0].metatable = mt if isinstance(mt, LuaTable) else None
+            return args[0]
+        return args[0] if args else None
+
+    def _getmetatable(self, args):
+        if args and isinstance(args[0], LuaTable):
+            return getattr(args[0], 'metatable', None)
+        return None
+
+    def _tbl_meta_get(self, tbl, key, _depth=0):
+        if not isinstance(tbl, LuaTable) or _depth > 8:
+            return None
+        v = tbl.rawget(key)
+        if v is not None:
+            return v
+        mt = getattr(tbl, 'metatable', None)
+        if not isinstance(mt, LuaTable):
+            return None
+        idx = mt.rawget('__index')
+        if idx is None:
+            return None
+        if isinstance(idx, LuaTable):
+            return self._tbl_meta_get(idx, key, _depth + 1)
+        if isinstance(idx, LuaFunction) or callable(idx):
+            r = self._call_function(idx, [tbl, key])
+            if isinstance(r, list):
+                r = r[0] if r else None
+            return r
+        return None
+
+
     # ─── Table helpers ────────────────────────────────────────────────
+
+    def _tbl_create(self, args):
+        n = int(args[0]) if args and args[0] is not None else 0
+        val = args[1] if len(args) > 1 else None
+        t = LuaTable()
+        if n < 0:
+            n = 0
+        if n > 4_000_000:
+            raise LuaSandboxError('table.create: size too large (%d)' % n)
+        t._array = [val] * n if val is not None else [None] * n
+        return t
+
+    def _tbl_clear(self, args):
+        if args and isinstance(args[0], LuaTable):
+            args[0]._array = []
+            args[0]._hash = {}
+        return None
+
+    def _tbl_find(self, args):
+        if len(args) < 2 or not isinstance(args[0], LuaTable):
+            return None
+        tbl, val = args[0], args[1]
+        init = int(args[2]) if len(args) > 2 and args[2] is not None else 1
+        for k in range(init, len(tbl._array) + 1):
+            if tbl.rawget(k) == val:
+                return k
+        return None
+
+    def _tbl_pack(self, args):
+        t = LuaTable()
+        t._array = list(args)
+        t.rawset('n', len(args))
+        return t
+
+    def _tbl_move(self, zargs):
+        if len(zargs) < 4 or not isinstance(zargs[0], LuaTable):
+            return zargs[4] if len(zargs) > 4 else None
+        a1, f, e, t = zargs[0], int(zargs[1]), int(zargs[2]), int(zargs[3])
+        a2 = zargs[4] if len(zargs) > 4 and isinstance(zargs[4], LuaTable) else a1
+        if e >= f:
+            if t > f and a1 is a2:
+                for k in range(e, f - 1, -1):
+                    a2.rawset(t + k - f, a1.rawget(k))
+            else:
+                for k in range(f, e + 1):
+                    a2.rawset(t + k - f, a1.rawget(k))
+        return a2
+
+    def _tbl_sort(self, args):
+        if not args or not isinstance(args[0], LuaTable):
+            return None
+        tbl = args[0]
+        comp = args[1] if len(args) > 1 else None
+        n = tbl.length()
+        items = [tbl.rawget(k) for k in range(1, n + 1)]
+        if comp is not None:
+            import functools
+            def _cmp(a, b):
+                r = self._call_function(comp, [a, b])
+                return -1 if self._lua_truthy(r) else 1
+            try:
+                items.sort(key=functools.cmp_to_key(_cmp))
+            except Exception:
+                raise LuaSandboxError('table.sort: invalid order function')
+        else:
+            try:
+                items.sort(key=lambda x: (x is None, x))
+            except Exception:
+                raise LuaSandboxError('table.sort: attempt to compare values')
+        tbl._array = items
+        return None
 
     def _tbl_concat(self, args):
         if not args or not isinstance(args[0], LuaTable): return ''
@@ -489,7 +1197,7 @@ class LuaSandbox:
     def _select(self, args):
         if not args: return None
         idx = args[0]; rest = args[1:]
-        if idx == '#': return len(rest)
+        if isinstance(idx, str) and idx.lstrip('\\') == '#': return len(rest)
         try:
             i = int(idx)
             if i < 0: i = len(rest) + i + 1
@@ -1006,7 +1714,7 @@ class LuaSandbox:
             if obj is None:
                 return None
             if isinstance(obj, LuaTable):
-                return obj.rawget(key)
+                return self._tbl_meta_get(obj, key)
             if isinstance(obj, dict):
                 return obj.get(key)
             if isinstance(obj, str) and key is not None:
@@ -1055,7 +1763,7 @@ class LuaSandbox:
 
         fn = None
         if isinstance(obj, LuaTable):
-            fn = obj.rawget(method)
+            fn = self._tbl_meta_get(obj, method)
         elif isinstance(obj, str):
             str_lib = self._globals.get('string')
             if isinstance(str_lib, LuaTable):
