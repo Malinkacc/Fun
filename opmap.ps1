@@ -72,6 +72,20 @@ $o9 | Select-Object -Last 2
 if ($c9 -ne 0) { $fail = 1; Write-Host "[XX] stream_assemble self-test FAILED"; $o9 | Select-Object -Last 6 } else { Write-Host "[OK] stream_assemble self-test passed" }
 
 Write-Host ""
+Write-Host "== STEP 10: moonveil vm_phase self-test (expect 'Result: 5/5' + '[OK] ALL PASSED')"
+$o10 = py -m obfuscator.deobfuscator.moonveil.vm_phase --test 2>&1
+$c10 = $LASTEXITCODE
+$o10 | Select-Object -Last 2
+if ($c10 -ne 0) { $fail = 1; Write-Host "[XX] vm_phase self-test FAILED"; $o10 | Select-Object -Last 6 } else { Write-Host "[OK] vm_phase self-test passed" }
+
+Write-Host ""
+Write-Host "== STEP 11: moonveil vm_tables self-test (expect 'Result: 5/5' + '[OK] ALL PASSED')"
+$o11 = py -m obfuscator.deobfuscator.moonveil.vm_tables --test 2>&1
+$c11 = $LASTEXITCODE
+$o11 | Select-Object -Last 2
+if ($c11 -ne 0) { $fail = 1; Write-Host "[XX] vm_tables self-test FAILED"; $o11 | Select-Object -Last 6 } else { Write-Host "[OK] vm_tables self-test passed" }
+
+Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
