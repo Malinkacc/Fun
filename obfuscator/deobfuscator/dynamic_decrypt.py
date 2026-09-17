@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 
 __all__ = ['CaptureResult', 'capture_layers', 'make_mock', '_self_test']
@@ -238,6 +239,29 @@ def _self_test() -> int:
     return 0 if failed == 0 else 1
 
 
+def _run_deep(work):
+    """Run `work` in a thread with a large stack (deep VM recursion)."""
+    import threading
+    out = {}
+
+    def target():
+        try:
+            out['res'] = work()
+        except BaseException as e:  # noqa: BLE001
+            out['err'] = e
+
+    threading.stack_size(256 * 1024 * 1024)
+    old_limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(200000)
+    t = threading.Thread(target=target)
+    t.start()
+    t.join()
+    sys.setrecursionlimit(old_limit)
+    if 'err' in out:
+        raise out['err']
+    return out.get('res')
+
+
 def main(argv=None) -> int:
     import argparse
     ap = argparse.ArgumentParser(
@@ -256,8 +280,8 @@ def main(argv=None) -> int:
         src = f.read()
     print('dynamic decrypt: %s (max_steps=%d depth=%d)' % (
         a.file, a.max_steps, a.depth))
-    r = capture_layers(src, max_steps=a.max_steps, max_depth=a.depth,
-                       progress=True)
+    r = _run_deep(lambda: capture_layers(src, max_steps=a.max_steps, max_depth=a.depth,
+                       progress=True))
     print(r.summary())
     if a.outdir:
         os.makedirs(a.outdir, exist_ok=True)

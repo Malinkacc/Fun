@@ -34,6 +34,12 @@ Round trip: `sprint7_emitters.py` + `sprint7_roundtrip.py` (5/5).
 * MoonSec V3: bootstrap = 422-iteration PRNG maze building env `h` from a
   marker stream (`\005`/`\006`), `d = getfenv()`; strings decrypted on demand
   by PRNG rejection loops (~8 steps/char); no loadstring up to 500M steps.
+  PROOF (this sprint): the payload stage dispatches by self-invocation
+  `f(8, nil, f, e, n)` -- tail recursion per element, depth = element count
+  (tens of thousands).  Interpreting that in CPython is infeasible by
+  construction (MAX_DEPTH 20000 + 256 MB-stack thread still die), so the
+  Python mirror (iterative re-implementation of the modes) is the ONLY
+  route; ref_bootstrap_dump.lua carries the exact constants for it.
 * MoonVeil 2.0.24: bootstrap ends ~450k steps; env decoded live
   (`vs, __mode, unpack, byte, char, gmatch, move, pack, create, insert, bor,
   bxor, band, btest, lshift, ...`); VM phase = inline loop over tables:

@@ -104,15 +104,23 @@ class _FuncEnv(dict):
         self.parent = parent
 
     def __contains__(self, k):
-        if dict.__contains__(self, k):
-            return True
-        return self.parent is not None and k in self.parent
+        e = self
+        while isinstance(e, _FuncEnv):
+            if dict.__contains__(e, k):
+                return True
+            e = e.parent
+        return isinstance(e, dict) and k in e
 
     def get(self, k, d=None):
-        v = dict.get(self, k, _MISS)
-        if v is not _MISS:
-            return v
-        return self.parent.get(k, d) if isinstance(self.parent, dict) else d
+        e = self
+        while isinstance(e, _FuncEnv):
+            v = dict.get(e, k, _MISS)
+            if v is not _MISS:
+                return v
+            e = e.parent
+        if isinstance(e, dict):
+            return e.get(k, d)
+        return d
 
     def __getitem__(self, k):
         if dict.__contains__(self, k):
@@ -151,7 +159,7 @@ class LuaFunction:
 
 class LuaSandbox:
     MAX_STEPS = 1_000_000
-    MAX_DEPTH = 200
+    MAX_DEPTH = 20000
 
     def __init__(self):
         self._steps = 0
