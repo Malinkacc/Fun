@@ -49,10 +49,14 @@ Proven findings encoded here:
 * ``o`` is the global env proxy (GETGLOBAL/SETGLOBAL via ``o[e[c]]``),
   ``m`` the upvalue table, ``k`` the constant array (op 8 = CLOSURE:
   ``l[e[d]]=_(k[e[c]],nil,m)``).
-* Op 24 is the CLOSURE upvalue-descriptor pseudo-instruction: the CLOSURE
-  handler consumes ``e[r]`` following instructions with ``if e[g]==24
-  then f[d-1]={l,e[c]}`` (stack upvalue) -- so proto opcode 24 records
-  are descriptors, not dispatchable ops.
+* Opcode 24 doubles as the CLOSURE upvalue DESCRIPTOR: every CLOSURE
+  handler consumes the next ``e[r]`` instructions positionally
+  (``for d=1,e[r] do n=n+1; local e=t[n]; if e[g]==24 then
+  f[d-1]={l,e[c]} else f[d-1]={o,e[c]} end end``) -- descriptor 24 =
+  stack upvalue R[B], otherwise an env-bound upvalue G-name K[B].
+  Opcode 24's dispatch-slot body is MOVE-shaped (unused when all 24s are
+  descriptors); 2b-9 part 2 confirmed real opcode 24 records in the
+  sample are all descriptors next to CLOSURE.
 * Duplicate opcodes exist; 17 byte-identical body groups on the real
   sample, e.g. [8,111] (CLOSURE ``l[e[d]]=_(k[e[c]],nil,m)``),
   [44,47,60], [101,128], [64,151], [105,145]; ops 152..160 share one
@@ -152,29 +156,46 @@ FLIP = {'<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==', '~=': '~='}
 
 
 def parse_cond(ct, consts):
-    """Reduce `f OP const` / `const OP f`; (None, None) for anything else."""
-    vals = list(ct)
-    if len(vals) != 3:
-        return None, None
-    (k1, a), (k2, o), (k3, b) = vals
-    if not (k2 == 'op' and o in FLIP):
-        return None, None
+    """Reduce `f OP const` / `const OP f`; (None, None) for anything else.
+    const = NUM | h.NAME | -NUM (4-token form with unary minus)."""
+    if 3 <= len(ct) <= 4:
+        oi = None
+        for i in range(len(ct)):
+            k, v = ct[i]
+            if k == 'op' and v in FLIP:
+                oi = i
+                break
+        if oi is None:
+            return None, None
+        opv = ct[oi][1]
+        lhs = ct[:oi]
+        rhs = ct[oi + 1:]
 
-    def operand(k, v):
-        if v == 'f':
-            return ('f',)
-        if k == 'num':
-            return ('num', int(float(v)))
-        if k == 'hname' and v[2:] in consts:
-            return ('num', consts[v[2:]])
-        return None
+        def as_var(part):
+            if len(part) == 1 and part[0][0] == 'name':
+                return part[0][1]
+            return None
 
-    L = operand(k1, a)
-    R = operand(k3, b)
-    if L == ('f',) and isinstance(R, tuple) and R[0] == 'num':
-        return o, R[1]
-    if isinstance(L, tuple) and L[0] == 'num' and R == ('f',):
-        return FLIP[o], L[1]
+        def as_const(part):
+            if len(part) == 1:
+                k, v = part[0]
+                if k == 'num':
+                    return int(float(v))
+                if k == 'hname' and v[2:] in consts:
+                    return consts[v[2:]]
+            if len(part) == 2 and part[0][1] == '-' and part[1][0] == 'num':
+                return -int(float(part[1][1]))
+            return None
+        lv = as_var(lhs)
+        if lv is not None:
+            cv = as_const(rhs)
+            if cv is not None:
+                return opv, cv
+        rv = as_var(rhs)
+        if rv is not None:
+            cv = as_const(lhs)
+            if cv is not None:
+                return FLIP[opv], cv
     return None, None
 
 

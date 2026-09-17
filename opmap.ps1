@@ -164,6 +164,13 @@ $o22 | Select-Object -Last 2
 if ($c22 -ne 0) { $fail = 1; Write-Host "[XX] msvm_dispatch self-test FAILED"; $o22 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_dispatch self-test passed" }
 
 
-Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
+Write-Host ""
+Write-Host "== STEP 23: moonsec msvm_semantics self-test (opcode semantics, expect 6/6)"
+$o23 = py -m obfuscator.deobfuscator.moonsec.msvm_semantics --test 2>&1
+$c23 = $LASTEXITCODE
+$o23 | Select-Object -Last 2
+if ($c23 -ne 0) { $fail = 1; Write-Host "[XX] msvm_semantics self-test FAILED"; $o23 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_semantics self-test passed" }
+
+Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'"
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail

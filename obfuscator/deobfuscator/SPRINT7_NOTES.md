@@ -259,6 +259,55 @@ primitive matching, composite-isolation).  `--sample` writes
   handlers -> full per-op mnemonic table; then 2b-10 upgrades msvm_lift from
   pseudo-Lua to real statements (register-vs-immediate resolved per-op).
 
+## MoonSec V3 opcode semantics (slice 2b-9 part 2, `moonsec/msvm_semantics.py`)
+
+The alias-executor half of 2b-9: per-opcode handler streams become canonical
+register-transfer effects and Lua 5.1 style mnemonics.  RESULT: **all 160
+dispatch opcodes resolve with zero unresolved markers**; the 90 opcodes used
+by the embedded program (516 instrs) map to:
+
+    JMP(x37) MOVE LOADK SETGLOBAL GETUPVAL FORLOOP FORPREP CLOSE_UV
+    RETURN_1/_m/_0 GETGLOBAL GETTABLE SETTABLE NEWTABLE LOADBOOL LOADNIL
+    TEST TESTN TESTSET EQ_C/EQ_K NE_C/NE_R CALL_0 CALLC VARARG SELF CONCAT
+    CLOSURE ADD/SUB/MUL/MOD/POW LEN NOP + SUPERINSTRUCTIONS (fused chains)
+
+Superinstruction examples: op 122 = LOADK x5 + GETTABLE; op 9 = 5x LOADIMM +
+CALL; op 18 = LOADBOOL+SETUPVAL+GETUPVAL+NEWTABLE x3; op 88/144 =
+MOVE+GETUPVAL+CALL(+SELF); op 119 = TAILCALL+RETURN_m+RETURN_0.  Top-count
+op 152 = JMP (x37) -- exactly what the 2b-7 operand profile predicted
+("A fixed, B/C absent -> jump-like").  Opcode 24 records are ALL CLOSURE
+upvalue descriptors (positional: `for d=1,e[r] do ... if e[g]==24 then
+f[d-1]={l,e[c]} else f[d-1]={o,e[c]} end` = stack vs env-bound upvalue);
+its dispatch body is MOVE-shaped but unused.
+
+Pipeline (all static): (1) context-aware op-walk over the guard tree --
+negative-constant guards (`if-4~=f`) and `h.NAME` guards parse as opcode
+splits; state-machine headers (`VAR=0; while VAR>-1 do`) become SM markers;
+(2) per-op SM expansion: conditions on the state var split the STATE set
+(states 0,1,2,... in order, `VAR=-2` terminates), other conditions are
+runtime choices and BOTH branches are kept (ALT); dummy for-selectors and
+`repeat if c then A break;end B` wrappers execute exactly one branch via the
+sequential walk; (3) symbolic alias executor resolves obfuscated temporaries
+(`f=e;r=d;o=c;s=l;h=s[f[o]];t=f[r];l[t]=h` -> R[A]:=R[B]) through a small
+expression parser into canonical operands (A/B/C fields, R[x], K[x], G[x],
+U[x], INSTR, pc); (4) effect classifier assigns mnemonics; `local n/e`
+declarations shadow pc/INSTR; step pairs (`n=n+1`,`e=t[n]`) are folded.
+
+Also refined `msvm_dispatch.parse_cond` with the same robust condition
+parser (unary-minus + h.NAME consts, 3..4 token forms): its real-sample
+catalog improved to 19 duplicate-body groups ([8,111] CLOSURE, [44,47,60],
+[20,97,99], [75,133], [101,128], [105,145], [152,154..160] phantom-tail,
+...); coverage proof unchanged (1..160, empty residual).
+
+`--test` is 6/6 (depth-aware statement split; synthetic 3-op dispatcher with
+plain/proxy/unrolled-MOVE handlers; alias resolution).  `--sample` writes
+`msvm_semantics.json` (per-op names/details/unresolved/alts).  opmap STEP 23
+added.
+
+* Next (2b-10): upgrade `msvm_lift` from pseudo-Lua to real statements using
+  this mnemonic table (skip CLOSURE descriptors positionally; decode
+  jumps/branches to labels; register-vs-immediate per mnemonic).
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -269,10 +318,10 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-22 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-23 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
-msvm_dispatch (22).
+msvm_dispatch (22), moonsec msvm_semantics (23).
