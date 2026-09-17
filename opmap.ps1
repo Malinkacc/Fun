@@ -93,6 +93,13 @@ $o12 | Select-Object -Last 2
 if ($c12 -ne 0) { $fail = 1; Write-Host "[XX] vm_lift(moonveil) self-test FAILED"; $o12 | Select-Object -Last 6 } else { Write-Host "[OK] moonveil vm_lift self-test passed" }
 
 Write-Host ""
+Write-Host "== STEP 13: wearedevs array_trace self-test (expect 'Result: 5/5' + '[OK] ALL PASSED')"
+$o13 = py -m obfuscator.deobfuscator.wearedevs.array_trace --test 2>&1
+$c13 = $LASTEXITCODE
+$o13 | Select-Object -Last 2
+if ($c13 -ne 0) { $fail = 1; Write-Host "[XX] array_trace self-test FAILED"; $o13 | Select-Object -Last 6 } else { Write-Host "[OK] array_trace self-test passed" }
+
+Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
