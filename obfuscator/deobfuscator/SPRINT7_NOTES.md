@@ -128,6 +128,41 @@ The 13702-char proto blob is DECODED.  Two-stage result:
   + tagged const/instr/nested records) to lift the literal instruction array,
   then map the opcode domain (~77..114) to Lua 5.1 semantics.
 
+## MoonSec V3 proto blob FULLY parsed (slice 2b-6, `moonsec/proto_decode.py`)
+
+The 2b-5 "remaining" item is DONE.  The framing mystery (why the first dword
+read as a huge BE count) is resolved: **factory mode 4 `n()` is LITTLE-endian**,
+not big-endian.  Mode 4 returns `(h*2^24)+(f*2^16)+(n*256)+e` over
+`string.byte(a, pos, pos+3)`; the first byte `e` is the least-significant, so
+every dword (counts, string lengths, n-operands) is LE, and `_()` (two `n()`
+words, low first) is a standard little-endian IEEE754 double.
+
+With the whole stream reinterpreted as LE, the blob parses as a single nested
+proto tree that consumes the decode EXACTLY:
+
+    seed 252 -> 6843 bytes -> consumed 6843/6843 (100.0%)
+    root proto: 70 consts (43 strings + 27 numbers), 284 instrs, 7 nested
+    whole tree: 14 protos, 516 instrs, 97 consts, 90 distinct opcodes (1..153)
+    const numbers: 47, 0, 22, 8, 3, 2, 38, 7, 12, 9, 6, 13, ... (clean)
+    top opcodes: 152(x37) 24(x27) 12(x25) 27(x21) 5(x20) 2(x19) 6(x15) ...
+
+Constant substitution is live: e.g. root instr #2 = `[8, 0,
+'MoonSec_StringsHiddenAttr', None]` -- ok-bit2 replaced operand B with const[1].
+
+Implementation: `Stream.word4be`->`word4le`, `float64` = `struct '<d'`, string
+length LE; `decode_proto` reads all counts/operands LE; `decode_full` returns
+(proto, consumed, total) and `find_seed` now scores candidates by consumed
+fraction (>=0.9) so the real blob is found structurally (no token fallback
+needed).  Synthetic writer switched to LE (`_w4le`, `_w_float`='<d').
+`--test` is 8/8 (T8 = real-blob structural discovery + exact-consume).
+`--sample` writes `protos.json` (full tree) + `proto_stats.json` +
+`blob_decoded.bin`.
+
+* Next (2b-7): map the 90 proto opcodes (range 1..153) to Lua 5.1 semantics by
+  correlating the lifted instruction array against the VM interpreter dispatch
+  (`function ne(...)` @183337) and the runtime opcode domain (~77..114), then
+  lift the proto tree to readable Lua like the Luraph pipeline.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner

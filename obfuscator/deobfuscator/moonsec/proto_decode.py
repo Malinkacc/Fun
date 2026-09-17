@@ -1,26 +1,26 @@
-"""MoonSec V3 proto-stream decoder (Sprint 7, slice 2b-5).
+"""MoonSec V3 proto-stream decoder (Sprint 7, slices 2b-5 / 2b-6).
 
 Completes the mirror chain started in slices 2b-1..2b-4:
 
     env literal r  -> stage1 primitives (mirror.py)
     t(107, enc)    -> stage2 constants  (mirror.py)
     t(145, enc)    -> stage3 toolbelt   (mirror.py)
-    de(u, ...)     -> THIS MODULE: decodes the 13702-char proto blob with
-                      the same payload decoder (seed = chunk state-machine
-                      final `e`, auto-discovered by structural validation)
-                      and runs the ee() proto assembler in Python.
+    de(u, ...)     -> THIS MODULE: decodes the 13702-char proto blob with the
+                      same payload decoder (seed auto-discovered) and runs the
+                      ee() proto assembler in Python.
 
 Reader set inside de() (all mirrored here, positions 1-based like Lua):
 
     posfn(x, flag)  flag truthy -> query position; else advance by x
     o()  = 1 byte                    (factory mode 5)
     t()  = 2-byte little-endian      (local reader in de)
-    n()  = 4-byte big-endian         (factory mode 4)
+    n()  = 4-byte LITTLE-endian      (factory mode 4: (h*2^24)+(f*2^16)+(n*256)+e
+                                      over string.byte(a, pos, pos+3) => the
+                                      first byte is the least-significant, so
+                                      the dword is little-endian)
     l()  = bit-range extractor       (factory mode 1, mirrored in mirror.py)
-    _()  = IEEE754 double from two BE words (low word first):
-           mant = bits(e,1,20)*2^32 + d; exp = bits(e,21,31);
-           sign = (-1)^bits(e,32); ldexp(sign, exp-1023)*(c + mant/2^52)
-           with denormal (exp==0, c=0) and inf/nan (exp==2047) branches
+    _()  = IEEE754 double: two n() words, low word first => a standard
+           little-endian 64-bit float (struct '<d')
     p(m) = string: m = n() length (0 -> ''), slice of the decoded blob
 
 ee() proto assembler (u = anti-tamper table with u[2]=2, u[3]=3):
@@ -40,22 +40,18 @@ ee() proto assembler (u = anti-tamper table with u[2]=2, u[3]=3):
     nested protos: n() recursive ee() calls (0-based list in Lua m[e-1])
     nparams: o()
 
-The chunk state machine (seed source) is not transpiled here; instead the
-seed is searched over 0..65535 by decoding the first words and validating
-the ee() framing structurally, which is sample-independent.
+REAL SHIPPED BLOB (moonsec_v3.lua) -- SOLVED.  The whole stream is little-
+endian.  Seed 252 decodes the 13702-char blob to 6843 bytes that parse as a
+single top-level proto consuming the stream EXACTLY (pos 6843/6843):
 
-REAL SHIPPED BLOB (moonsec_v3.lua): the 13702-char proto blob does NOT use
-the synthetic ee() framing above -- its first dword is a little-endian count
-(= 70) and its const records use a tag/length layout that does not round-trip
-through decode_proto.  The payload cipher is identical, however, so the seed
-is recovered by scoring every candidate decode for the presence of real VM
-API string constants (find_seed_by_tokens).  Seed 252 is unique: it is the
-only candidate exposing the stdlib/import names (print, string, pcall,
-loadstring, getfenv, setmetatable, ...) plus MoonSec internals
-(MoonSec_StringsHiddenAttr) and anti-tamper taunts (Federal was here, the
-webcam ASCII art).  extract_blob_strings then recovers the full 44-entry
-string-constant table as printable-ASCII runs.  --sample writes
-blob_strings.json + blob_decoded.bin.
+    70 consts (43 strings + 27 numbers), 284 instructions, 7 nested protos.
+
+The seed is unique: it is the only candidate whose decode both (a) starts a
+structurally valid ee() stream that consumes ~100% of the bytes and (b)
+exposes the real VM API string constants (print, string, pcall, loadstring,
+getfenv, setmetatable, ...) plus MoonSec internals (MoonSec_StringsHiddenAttr)
+and anti-tamper taunts (Federal was here, the webcam ASCII art).  find_seed
+does the structural scan; find_seed_by_tokens is the content-based fallback.
 
 Usage:
     py -m obfuscator.deobfuscator.moonsec.proto_decode --test
@@ -83,7 +79,10 @@ class StreamError(Exception):
 
 
 class Stream:
-    """Position-scanned byte stream with the MoonSec reader set (1-based)."""
+    """Position-scanned byte stream with the MoonSec reader set (1-based).
+
+    All multi-byte integers are LITTLE-endian (factory mode 4 = n() builds the
+    dword with the first byte as the least-significant one)."""
 
     def __init__(self, data, pos=1):
         self.d = data
@@ -114,32 +113,24 @@ class Stream:
         self.pos += 2
         return hi * 256 + lo
 
-    def word4be(self):
+    def word4le(self):
         if self.pos < 1 or self.pos + 3 > len(self.d):
-            raise StreamError('word4be out of range at %d' % self.pos)
+            raise StreamError('word4le out of range at %d' % self.pos)
         b = self.d[self.pos - 1:self.pos + 3]
         self.pos += 4
-        return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+        return b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24)
 
     def float64(self):
-        d = self.word4be()
-        e = self.word4be()
-        mant = bit_range(e, 1, 20) * (2 ** 32) + d
-        exp = bit_range(e, 21, 31)
-        sign = -1.0 if bit_range(e, 32, 32) else 1.0
-        c = 1.0
-        if exp == 0:
-            if mant == 0:
-                return sign * 0.0
-            exp = 1
-            c = 0.0
-        elif exp == 2047:
-            return sign * (math.inf if mant == 0 else math.nan)
-        return math.ldexp(sign, exp - 1023) * (c + mant / (2 ** 52))
+        # _() reads two n() words, low word first -> a standard LE double.
+        if self.pos < 1 or self.pos + 7 > len(self.d):
+            raise StreamError('float64 out of range at %d' % self.pos)
+        b = self.d[self.pos - 1:self.pos + 7]
+        self.pos += 8
+        return struct.unpack('<d', bytes(b))[0]
 
     def string(self, n=None):
         if n is None:
-            n = self.word4be()
+            n = self.word4le()
             if n == 0:
                 return b''
         if n < 0 or self.pos - 1 + n > len(self.d):
@@ -152,7 +143,7 @@ class Stream:
 def decode_proto(st, u2=2, u3=3, int_fix=True):
     """Mirror of ee(): one function proto from the stream."""
     consts = []
-    cnt = st.word4be()
+    cnt = st.word4le()
     if cnt < 0 or cnt > 1 << 20:
         raise StreamError('const count %d' % cnt)
     for _i in range(cnt):
@@ -171,7 +162,7 @@ def decode_proto(st, u2=2, u3=3, int_fix=True):
         consts.append(v)
 
     instrs = []
-    icnt = st.word4be()
+    icnt = st.word4le()
     if icnt < 0 or icnt > 1 << 24:
         raise StreamError('instr count %d' % icnt)
     for _i in range(icnt):
@@ -185,11 +176,11 @@ def decode_proto(st, u2=2, u3=3, int_fix=True):
             ins[2] = st.word2le()
             ins[3] = st.word2le()
         elif fk == 1:
-            ins[2] = st.word4be()
+            ins[2] = st.word4le()
         elif fk == u2:
-            ins[2] = st.word4be() - 65536
+            ins[2] = st.word4le() - 65536
         elif fk == u3:
-            ins[2] = st.word4be() - 65536
+            ins[2] = st.word4le() - 65536
             ins[3] = st.word2le()
         else:
             raise StreamError('bad operand kind %d' % fk)
@@ -202,7 +193,7 @@ def decode_proto(st, u2=2, u3=3, int_fix=True):
         instrs.append(ins)
 
     nested = []
-    ncnt = st.word4be()
+    ncnt = st.word4le()
     if ncnt < 0 or ncnt > 1 << 16:
         raise StreamError('nested count %d' % ncnt)
     for _i in range(ncnt):
@@ -225,6 +216,16 @@ def decode_all(data, pos=1, max_protos=4096):
     while st.remaining() > 0 and len(protos) < max_protos:
         protos.append(decode_proto(st))
     return protos
+
+
+def decode_full(data, pos=1):
+    """Decode ONE top-level proto and report (proto, consumed, total).  The
+    real shipped blob is a single nested proto tree that consumes the stream
+    exactly, so consumed/total == 1.0 is the structural validity signal."""
+    st = Stream(data, pos)
+    proto = decode_proto(st)
+    consumed = st.query() - pos
+    return proto, consumed, len(data)
 
 
 # --------------------------------------------------------------------------- #
@@ -252,41 +253,58 @@ def _nibbles(blob):
     return base
 
 
-def find_seed(blob, seed_max=1024, head=12):
-    """Discover the payload seed f so that decode_payload(blob, f) starts a
-    structurally valid ee() stream.  Uses only the first `head` bytes for
-    candidate filtering, then full-parses survivors."""
+def find_seed(blob, seed_max=1024, head=12, min_frac=0.9):
+    """Discover the payload seed f such that decode_payload(blob, f) is a
+    structurally valid ee() stream.  A cheap head filter (small LE const count
+    + valid first tag) selects candidates; each survivor is fully parsed and
+    scored by the fraction of the stream it consumes.  The real blob parses to
+    exactly 1.0; the best candidate is returned."""
     base = _nibbles(blob)
     if len(base) < head:
         return None, None
     cands = []
     for f in range(seed_max):
         bs = [(base[i] + f * (i + 1)) % 256 for i in range(head)]
-        cc = (bs[0] << 24) | (bs[1] << 16) | (bs[2] << 8) | bs[3]
+        cc = bs[0] | (bs[1] << 8) | (bs[2] << 16) | (bs[3] << 24)   # LE32
         if not (1 <= cc <= 4096):
             continue
-        tag = bs[4]
-        if tag not in (0, 1, 2):
+        if bs[4] not in (0, 1, 2):
             continue
         cands.append(f)
+    best = None
     for f in cands:
         data = decode_payload(blob, f)
         try:
-            protos = decode_all(data)
-        except (StreamError, IndexError, ValueError, OverflowError):
+            proto, consumed, total = decode_full(data)
+        except (StreamError, IndexError, ValueError, OverflowError, struct.error):
             continue
-        if protos and protos[0]['instrs'] and _plausible(protos):
-            return f, protos
+        frac = consumed / total if total else 0.0
+        if frac >= min_frac and _plausible_proto(proto):
+            if best is None or frac > best[0]:
+                best = (frac, f, [proto])
+    if best is not None:
+        return best[1], best[2]
     return None, None
 
 
-def _plausible(protos, min_instr=4):
+def _plausible_proto(proto, min_instr=4):
     """Reject accidental parses: require a minimal amount of real content."""
-    total = [0, 0]
+    total = [0]
 
     def walk(p):
         total[0] += len(p['instrs'])
-        total[1] += len(p['consts'])
+        for q in p['nested']:
+            walk(q)
+
+    walk(proto)
+    return total[0] >= min_instr
+
+
+def _plausible(protos, min_instr=4):
+    total = [0]
+
+    def walk(p):
+        total[0] += len(p['instrs'])
         for q in p['nested']:
             walk(q)
 
@@ -299,12 +317,9 @@ def _plausible(protos, min_instr=4):
 # real-sample blob: token-based seed discovery + string-constant extraction
 # --------------------------------------------------------------------------- #
 #
-# The shipped MoonSec V3 blob does NOT use the synthetic ee() framing modeled
-# above (its first dword is a little-endian count = 70, and its const records
-# use a tag/length layout that does not round-trip through decode_proto).  The
-# payload cipher, however, is identical, so the correct seed is the one whose
-# decode exposes the VM's real string-constant table.  That seed is unique:
-# only it reproduces the standard Lua/Roblox API names the VM imports.
+# Content-based fallback for seed discovery: the correct seed is the unique one
+# whose decode exposes the VM's real string-constant table (stdlib/import names
+# the VM imports).  Used when the structural scan is inconclusive.
 
 _API_TOKENS = (
     b'print', b'string', b'pcall', b'loadstring', b'getfenv',
@@ -332,8 +347,7 @@ def _longest_run(data):
 def find_seed_by_tokens(blob, seed_max=256, min_tokens=3):
     """Discover the blob seed by scoring each candidate decode for the presence
     of real VM API string constants.  Returns (seed, decoded_bytes) or (None,
-    None).  Robust and sample-independent: the correct seed is the unique one
-    exposing multiple stdlib/import names."""
+    None)."""
     best = None
     for s in range(seed_max):
         data = decode_payload(blob, s)
@@ -351,9 +365,7 @@ def find_seed_by_tokens(blob, seed_max=256, min_tokens=3):
 
 def extract_blob_strings(data, min_len=4):
     """Extract the VM string-constant table from a decoded blob as maximal
-    printable-ASCII runs (>= min_len).  This recovers every string constant
-    (API imports, anti-tamper messages, hidden-attribute markers) without
-    depending on the exact numeric record framing."""
+    printable-ASCII runs (>= min_len)."""
     out = []
     for m in re.finditer(rb'[ -~]{%d,}' % min_len, data):
         try:
@@ -437,22 +449,20 @@ def _w2le(out, v):
     out.append((v >> 8) & 0xff)
 
 
-def _w4be(out, v):
-    out.append((v >> 24) & 0xff)
-    out.append((v >> 16) & 0xff)
-    out.append((v >> 8) & 0xff)
+def _w4le(out, v):
     out.append(v & 0xff)
+    out.append((v >> 8) & 0xff)
+    out.append((v >> 16) & 0xff)
+    out.append((v >> 24) & 0xff)
 
 
 def _w_float(out, v):
-    hi, lo = struct.unpack('>II', struct.pack('>d', v))
-    _w4be(out, lo)
-    _w4be(out, hi)
+    out.extend(struct.pack('<d', v))
 
 
 def _w_str(out, s):
     b = s.encode('latin1')
-    _w4be(out, len(b))
+    _w4le(out, len(b))
     out.extend(b)
 
 
@@ -461,30 +471,30 @@ def _synth_stream():
     one nested proto, 2 params."""
     out = bytearray()
     # consts
-    _w4be(out, 3)
+    _w4le(out, 3)
     _w_byte(out, 2); _w_byte(out, 1)          # True
     _w_byte(out, 1); _w_float(out, 3.5)       # number
     _w_byte(out, 0); _w_str(out, 'abc')       # string
     # instructions (6 headers: 5 real + 1 data header with bit0=1)
-    _w4be(out, 6)
+    _w4le(out, 6)
     _w_byte(out, 0b0000000)                   # fk=0 ok=0
     _w2le(out, 40); _w2le(out, 1); _w2le(out, 2); _w2le(out, 3)
     _w_byte(out, 0b0000001 << 1)              # fk=1: bits2-3=01
-    _w2le(out, 41); _w2le(out, 2); _w4be(out, 70000)
+    _w2le(out, 41); _w2le(out, 2); _w4le(out, 70000)
     _w_byte(out, 0b010 << 1)                  # fk=2 signed
-    _w2le(out, 42); _w2le(out, 3); _w4be(out, 65536 + 1234)
+    _w2le(out, 42); _w2le(out, 3); _w4le(out, 65536 + 1234)
     _w_byte(out, 0b011 << 1)                  # fk=3 signed + C
-    _w2le(out, 43); _w2le(out, 4); _w4be(out, 65536 + 77); _w2le(out, 9)
+    _w2le(out, 43); _w2le(out, 4); _w4le(out, 65536 + 77); _w2le(out, 9)
     _w_byte(out, 0b0111 << 3)                 # fk=0, ok=7: substitute all
     _w2le(out, 1); _w2le(out, 5)              # opcode<-const1 (True->bool!)
     _w2le(out, 3); _w2le(out, 2)              # B<-const3 'abc', C<-const2 3.5
     # data header (bit0=1) interleaved before nested count
     _w_byte(out, 0b1)
     # nested: 1 proto with 0 consts 0 instrs 0 nested 1 param
-    _w4be(out, 1)
-    _w4be(out, 0)
-    _w4be(out, 0)
-    _w4be(out, 0)
+    _w4le(out, 1)
+    _w4le(out, 0)
+    _w4le(out, 0)
+    _w4le(out, 0)
     _w_byte(out, 1)
     _w_byte(out, 2)                           # nparams of outer
     return bytes(out)
@@ -499,15 +509,15 @@ def _selftest():
             fails.append(tag)
 
     st = Stream(b'\x01\x02\x03\x04\x05\x06\x07')
-    chk('T1 readers: byte/word2le/word4be/bit range',
-        st.byte1() == 1 and st.word2le() == 0x0302 and st.word4be() == 0x04050607
+    chk('T1 readers: byte/word2le/word4le/bit range',
+        st.byte1() == 1 and st.word2le() == 0x0302 and st.word4le() == 0x07060504
         and bit_range(0b10110, 2, 3) == 0b11 and st.remaining() == 0)
     out = bytearray(); _w_float(out, 3.5); _w_float(out, -0.0); _w_float(out, 2.0)
     st = Stream(bytes(out))
     chk('T2 float64 reader (3.5, -0.0, 2.0)',
         st.float64() == 3.5 and math.copysign(1, st.float64()) == -1.0
         and st.float64() == 2.0)
-    out = bytearray(); _w_str(out, 'hello'); _w4be(out, 0)
+    out = bytearray(); _w_str(out, 'hello'); _w4le(out, 0)
     st = Stream(bytes(out))
     chk('T3 string reader + zero-length',
         st.string() == b'hello' and st.string() == b'')
@@ -546,8 +556,6 @@ def _selftest():
         'seed=%s (equiv class mod 1024 of %d)' % (f, seed))
 
     # T7: real-blob path -- token-based seed discovery + string extraction.
-    # Build a synthetic "shipped-style" blob whose plaintext carries real VM
-    # API names, encode with a known seed, and confirm discovery + extraction.
     plain = (b'\x46\x00\x00\x00'                       # LE count header
              b'\x00print\x00string\x00pcall'
              b'\x00loadstring\x00getfenv\x00setmetatable'
@@ -571,8 +579,42 @@ def _selftest():
         and b'MoonSec_StringsHiddenAttr' in joined7,
         'seed=%s runs=%d' % (f7, len(strs7)))
 
+    # T8: real-blob STRUCTURAL discovery -- a single LE proto (one substituted
+    # string const + 5 instructions, like the shipped blob's shape) encoded at
+    # seed 252 must be found by find_seed and consume the stream exactly.
+    p8 = bytearray()
+    _w4le(p8, 1)                              # const count = 1 (small, LE)
+    _w_byte(p8, 0); _w_str(p8, 'MoonSec_StringsHiddenAttr')   # const[0] string
+    _w4le(p8, 5)                              # instr count = 5
+    _w_byte(p8, 0b10 << 3)                    # fk=0, ok bit2 -> substitute B
+    _w2le(p8, 8); _w2le(p8, 0); _w2le(p8, 1); _w2le(p8, 0)
+    for _op in (18, 5, 26, 12):                # 4 plain fk=0 instructions
+        _w_byte(p8, 0)
+        _w2le(p8, _op); _w2le(p8, 0); _w2le(p8, 0); _w2le(p8, 0)
+    _w4le(p8, 0)                              # nested count = 0
+    _w_byte(p8, 0)                            # nparams
+    p8 = bytes(p8)
+    seed8 = 252
+    body8 = []
+    c8 = 0
+    for k, b in enumerate(p8):
+        c8 = (seed8 + c8) % 256
+        raw = (b - c8) % 256
+        body8.append(sbox7[raw // 16])
+        body8.append(sbox7[raw % 16])
+    blob8 = sbox7 + ''.join(body8)
+    f8, protos8 = find_seed(blob8)
+    consumed8 = total8 = 0
+    if f8 is not None:
+        _pr, consumed8, total8 = decode_full(decode_payload(blob8, f8))
+    chk('T8 real-blob structural discovery consumes stream exactly',
+        f8 is not None and f8 % 1024 == seed8 % 1024
+        and protos8 and consumed8 == total8
+        and protos8[0]['instrs'][0][2] == b'MoonSec_StringsHiddenAttr',
+        'seed=%s consumed=%d/%d' % (f8, consumed8, total8))
+
     print('')
-    print('Result: %d/7' % (7 - len(fails)))
+    print('Result: %d/8' % (8 - len(fails)))
     if fails:
         print('[XX] FAILURES: %d' % len(fails))
         return 1
@@ -598,9 +640,12 @@ def main(argv=None):
         print('[XX] proto blob not found')
         return 1
     print('blob chars=%d alphabet=%d' % (len(blob), len(set(blob))))
+
     f, protos = find_seed(blob)
     if f is not None:
-        print('seed f=%d protos=%d (structural ee parse)' % (f, len(protos)))
+        proto, consumed, total = decode_full(decode_payload(blob, f))
+        print('seed f=%d  STRUCTURAL ee parse: consumed %d/%d (%.1f%%)' % (
+            f, consumed, total, 100.0 * consumed / total))
         st = proto_stats(protos)
         print('protos(total)=%d instrs=%d consts=%d opcodes=%d range=%s' % (
             st['protos'], st['instrs'], st['consts'], st['distinct_opcodes'],
@@ -615,32 +660,29 @@ def main(argv=None):
         p2 = os.path.join(a.outdir, 'proto_stats.json')
         json.dump({k: v for k, v in st.items() if k != 'strings'},
                   open(p2, 'w', encoding='utf-8'), indent=1)
-        print('saved ->', p1, p2)
+        p3 = os.path.join(a.outdir, 'blob_decoded.bin')
+        open(p3, 'wb').write(decode_payload(blob, f))
+        print('saved ->', p1, p2, p3)
         return 0
 
-    # Real shipped blob: synthetic ee() framing does not round-trip, but the
-    # payload cipher is identical.  Recover the seed via API-token scoring and
-    # extract the VM string-constant table directly.
+    # Fallback: content-based seed discovery + raw string extraction.
     f, data = find_seed_by_tokens(blob)
     if f is None:
         print('[XX] seed not found (neither structural nor token match)')
         return 1
     strings = extract_blob_strings(data)
-    word0_le = int.from_bytes(data[0:4], 'little')
-    word0_be = int.from_bytes(data[0:4], 'big')
     print('seed f=%d (token match)  decoded bytes=%d' % (f, len(data)))
-    print('word0: LE32=%d BE32=%d  api-tokens=%d/%d  longest-ascii-run=%d' % (
-        word0_le, word0_be, _token_hits(data), len(_API_TOKENS),
-        _longest_run(data)))
+    print('word0: LE32=%d  api-tokens=%d/%d  longest-ascii-run=%d' % (
+        int.from_bytes(data[0:4], 'little'), _token_hits(data),
+        len(_API_TOKENS), _longest_run(data)))
     print('string constants: %d (first %d):' % (len(strings), a.show))
     for s in strings[:a.show]:
         print('  %r' % s[:70])
     os.makedirs(a.outdir, exist_ok=True)
     p1 = os.path.join(a.outdir, 'blob_strings.json')
-    json.dump({'seed': f, 'decoded_len': len(data), 'word0_le': word0_le,
+    json.dump({'seed': f, 'decoded_len': len(data),
                'api_token_hits': _token_hits(data),
-               'longest_run': _longest_run(data),
-               'strings': strings},
+               'longest_run': _longest_run(data), 'strings': strings},
               open(p1, 'w', encoding='utf-8'), indent=1)
     p2 = os.path.join(a.outdir, 'blob_decoded.bin')
     open(p2, 'wb').write(data)

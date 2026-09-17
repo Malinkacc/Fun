@@ -136,7 +136,7 @@ $o18 | Select-Object -Last 2
 if ($c18 -ne 0) { $fail = 1; Write-Host "[XX] vm_model self-test FAILED"; $o18 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec vm_model self-test passed" }
 
 Write-Host ""
-Write-Host "== STEP 19: moonsec proto_decode self-test (proto-stream + blob seed, expect 7/7)"
+Write-Host "== STEP 19: moonsec proto_decode self-test (proto-stream + blob seed, expect 8/8)"
 $o19 = py -m obfuscator.deobfuscator.moonsec.proto_decode --test 2>&1
 $c19 = $LASTEXITCODE
 $o19 | Select-Object -Last 2
