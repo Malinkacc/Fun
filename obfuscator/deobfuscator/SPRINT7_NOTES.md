@@ -94,6 +94,40 @@ verbatim in the sample):
 * Next (2b-5): mirror the de-blob decode + ee framing in Python to recover
   the literal instruction array, then map opcode leaves to Lua 5.1 semantics.
 
+## MoonSec V3 proto blob decoded (slice 2b-5, `moonsec/proto_decode.py`)
+
+The 13702-char proto blob is DECODED.  Two-stage result:
+
+* Payload mirror proven byte-exact.  `mirror.decode_payload(payload1, seed)`
+  reproduces the real constants table exactly
+  (`\x02\x044083V_TpiQHS\x02\x010hcQSdrdZ...`, 51 records, terminator `\x05`).
+  Record format = `\x02` tag, digit-count byte, ASCII digit string, name.
+  The decoder's unknown-char -> 0 fallback is NOT an error path: it is a
+  deliberate many-to-one encoding (out-of-sbox body characters represent
+  nibble 0).  Payload1 body: 66 distinct chars, 15/16 sbox chars present,
+  88/1276 out-of-sbox; empirical char->nibble map has zero conflicts.
+* Blob seed recovered = 252 (unique).  The shipped blob does NOT use the
+  synthetic ee() framing (first dword is little-endian count = 70; const
+  records use a tag/length layout that does not round-trip decode_proto), so
+  structural validation fails.  Instead the seed is found by scoring every
+  candidate decode for real VM API string constants (`find_seed_by_tokens`).
+  Seed 252 is the ONLY candidate exposing the stdlib/import names -- it hits
+  9/12 API tokens with a 109-char ASCII run; every other seed hits 0.
+* String-constant table fully recovered (44 entries) via
+  `extract_blob_strings` (printable-ASCII runs): `print`, `string`, `char`,
+  `pcall`, `getfenv`, `load`, `loadstring`, `type`, `setmetatable`; MoonSec
+  internals `cfex`, `getinternalsyscall`, `isoverwritten`,
+  `MoonSec_StringsHiddenAttr`, `wasFederalReallyHereAttribute`; and the
+  anti-tamper taunts `Federal was here`, `Hands Up Skid`,
+  `A picture taken from your webcam:` + the webcam ASCII art,
+  `Your platform is unable to execute this script.`
+* `--test` is 7/7 (T7 = synthetic real-blob-path round-trip: encode API names
+  at seed 252, recover seed + strings).  `--sample` writes
+  `_captures/msvm/blob_strings.json` + `blob_decoded.bin` (6843 bytes).
+* Remaining (2b-6): reverse the exact numeric record framing (LE-count header
+  + tagged const/instr/nested records) to lift the literal instruction array,
+  then map the opcode domain (~77..114) to Lua 5.1 semantics.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -104,8 +138,9 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-18 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-19 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
-moonveil opcode_semantics (17), moonsec vm_model (18).
+moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
+(19).
