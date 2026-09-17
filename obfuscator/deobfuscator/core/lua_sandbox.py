@@ -1840,6 +1840,17 @@ class LuaSandbox:
                 return r.values
             except LuaBreak:
                 return None
+        if isinstance(fn, LuaTable):
+            cc = None
+            mt = getattr(fn, 'metatable', None)
+            while isinstance(mt, LuaTable):
+                cc = mt.rawget('__call')
+                if cc is not None:
+                    break
+                mt = getattr(mt, 'metatable', None)
+            if cc is not None and cc is not fn:
+                return self._call_function(cc, [fn] + list(args), env)
+            return None
         if callable(fn):
             return fn(args)
         return None
