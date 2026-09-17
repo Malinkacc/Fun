@@ -51,6 +51,13 @@ $o6 | Select-Object -Last 2
 if ($c6 -ne 0) { $fail = 1; Write-Host "[XX] string_harvest self-test FAILED"; $o6 | Select-Object -Last 6 } else { Write-Host "[OK] string_harvest self-test passed" }
 
 Write-Host ""
+Write-Host "== STEP 7: moonveil vm_trace self-test (expect 'Result: 6/6' + '[OK] ALL PASSED')"
+$o7 = py -m obfuscator.deobfuscator.moonveil.vm_trace --test 2>&1
+$c7 = $LASTEXITCODE
+$o7 | Select-Object -Last 2
+if ($c7 -ne 0) { $fail = 1; Write-Host "[XX] vm_trace self-test FAILED"; $o7 | Select-Object -Last 6 } else { Write-Host "[OK] vm_trace self-test passed" }
+
+Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
