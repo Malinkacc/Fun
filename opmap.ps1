@@ -107,7 +107,7 @@ $o14 | Select-Object -Last 2
 if ($c14 -ne 0) { $fail = 1; Write-Host "[XX] sprint7 round-trip FAILED"; $o14 | Select-Object -Last 8 } else { Write-Host "[OK] sprint7 round-trip passed" }
 
 Write-Host ""
-Write-Host "== STEP 15: moonsec mirror self-test (bit mirror vs real Lua closure, expect 5/5)"
+Write-Host "== STEP 15: moonsec mirror self-test (bit mirror vs real Lua closure, expect 7/7)"
 $o15 = py -m obfuscator.deobfuscator.moonsec.mirror --test 2>&1
 $c15 = $LASTEXITCODE
 $o15 | Select-Object -Last 2
