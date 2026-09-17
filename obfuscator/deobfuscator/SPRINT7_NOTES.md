@@ -46,9 +46,53 @@ Round trip: `sprint7_emitters.py` + `sprint7_roundtrip.py` (5/5).
   bytecode words read from `H[neg_hash]` (floats), operands from a 3-slot
   keystream table, effects as register writes (~95k instrs per 4M steps).
 * WeAreDevs v1.0.0: 8233-entry 'M'-prefixed cipher array with head/tail
-  rotation (~4M steps per pass in the sandbox); VM resolves strings per use
-  via concatenation (no table writes), so plaintext capture needs the
-  per-entry cipher mirror.
+  rotation (~4M steps per pass in the sandbox).  RESOLVED by
+  `wearedevs/array_mirror.py` (slice 4b): the bootstrap `do` block decrypts
+  the array in place with two codecs -- '(' entries = base64 with custom
+  64-char alphabet table `S`, 'M' entries = ascii85-like with custom 85-value
+  map `l` (groups of <=5 chars forward, Y=Y*85+m, missing tail positions use
+  pad value 84 = `480327835%11715311`, n chars emit n-1 bytes big-endian).
+  Both alphabets parse as exact bijections (0..63 / 0..84).  Decoded: 951
+  printable strings (Roblox GUI-lib API: InvokeServer, WaitForChild,
+  BuildConfigSection, Colorpicker, Dropdown, cloneref, ... plus ~250 random
+  12-char renamed identifiers) and ~7280 short binary blobs (bytes 0x00-0x03
+  dominate = VM data).  Verification: re-encoding decoded bytes reproduces
+  2553/8233 cipher entries byte-exactly; the rest differ only in the final
+  partial group (ascii85 tail encoding is non-injective; decoded bytes are
+  identical).  The earlier sandbox plain=0 observation is explained: the
+  decrypt block runs after the rotation phase, beyond the traced window.
+
+## MoonSec V3 VM architecture (slice 2b-4, `moonsec/vm_model.py`)
+
+Static model of what the stage2/stage3 constants parameterise (all anchors
+verbatim in the sample):
+
+* Proto-stream decoder: `local function de(u,...) local a=t(e,">4^K...")` --
+  a 13702-char blob over an 85-char printable alphabet, decoded by the same
+  payload decoder `t` mirrored in mirror.py.
+* Proto assembler `ee()` builds one function proto as
+  `{instructions, nested_protos, nparams, {const_pool}}`: typed constant
+  pool (tag 2 = boolean via `o()~=#{}`, tag 1 = string via `_()` with
+  trailing-zero strip, tag 0 = number via `p()`); instruction loop reads a
+  packed byte, `bit(e,1)==0` selects instructions, `f=bits(e,2,3)` picks
+  operand-B kind (0 -> two extra words, 1 -> one, u[2]/u[3] -> minus 2^16
+  offsets), `o=bits(e,4,6)` selects constant-pool substitution for fields
+  1/3/4; nested protos recurse via `ee()`.
+* VM closure `_(z,o,m)`: preamble resolves `l=f(7)` (env proxy),
+  `t=f(6,49,1,79,z)=z[49]` (instruction array), `k=f(6,63,2,43,z)=z[63]`
+  (constant array), `j=f(6,98,3,28,z)=z[98]` (varargs boundary) -- keys are
+  exactly the stage2 constants XiHzKHKe=49, grtQZmMW=63, dbYQXyMl=98.
+* Closure wiring: stream marker \006 installs
+  `d[name]=function(n,e) return f(8,nil,f,e,n) end`; factory mode 8 =
+  `do return n(l,nil,n) end` -- the proto hand-off channel.  Factory mode
+  table (verbatim): 1 = bit-range extractor, 2 = bases (16777216,65536,256),
+  4/5 = byte-reader closures, 6 = `d[n]` index, 7 = metatable proxy,
+  8 = closure creation.
+* VM dispatch: `f=e[g]` (g=1) with numeric guards; opcode domain ~[77..114]
+  (bounds 76/96/99/101/104/114 from stage2, literal leaves 98..104), leaves
+  are unrolled Lua 5.1 opcode groups.  VM body = 53652 chars.
+* Next (2b-5): mirror the de-blob decode + ee framing in Python to recover
+  the literal instruction array, then map opcode leaves to Lua 5.1 semantics.
 
 ## Sandbox correctness fix (this sprint)
 
@@ -60,7 +104,8 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-14 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-18 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
-sprint7 round-trip (14).
+sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
+moonveil opcode_semantics (17), moonsec vm_model (18).

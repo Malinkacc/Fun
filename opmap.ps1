@@ -128,6 +128,13 @@ $c17 = $LASTEXITCODE
 $o17 | Select-Object -Last 2
 if ($c17 -ne 0) { $fail = 1; Write-Host "[XX] opcode_semantics self-test FAILED"; $o17 | Select-Object -Last 6 } else { Write-Host "[OK] moonveil opcode_semantics self-test passed" }
 
+Write-Host ""
+Write-Host "== STEP 18: moonsec vm_model self-test (VM architecture anchors, expect 6/6)"
+$o18 = py -m obfuscator.deobfuscator.moonsec.vm_model --test 2>&1
+$c18 = $LASTEXITCODE
+$o18 | Select-Object -Last 2
+if ($c18 -ne 0) { $fail = 1; Write-Host "[XX] vm_model self-test FAILED"; $o18 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec vm_model self-test passed" }
+
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
