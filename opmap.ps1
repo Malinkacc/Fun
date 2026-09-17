@@ -37,6 +37,13 @@ $o4 | Select-Object -First 12
 if ($c4 -ne 0) { $fail = 1; Write-Host "[XX] demo lift FAILED"; $o4 | Select-Object -Last 5 } else { Write-Host "[OK] lifted code written: out\lifted.txt" }
 
 Write-Host ""
+Write-Host "== STEP 5: dynamic_decrypt self-test (expect 'Result: 5/5' + '[OK] ALL PASSED')"
+$o5 = py -m obfuscator.deobfuscator.dynamic_decrypt --test 2>&1
+$c5 = $LASTEXITCODE
+$o5 | Select-Object -Last 2
+if ($c5 -ne 0) { $fail = 1; Write-Host "[XX] dynamic_decrypt self-test FAILED"; $o5 | Select-Object -Last 6 } else { Write-Host "[OK] dynamic_decrypt self-test passed" }
+
+Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
