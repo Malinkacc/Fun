@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.zip
+.venv/
+venv/
+.DS_Store
+_captures/
+
+# user-side verification output (opmap.ps1)
+out/
