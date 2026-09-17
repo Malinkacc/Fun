@@ -89,6 +89,49 @@ class _EnvTable(LuaTable):
             super().rawset(key, value)
 
 
+_MISS = object()
+
+
+class _FuncEnv(dict):
+    """Function env with an upvalue parent chain: locals live in this dict,
+    reads fall back to enclosing envs, and assignments to names declared in
+    an enclosing function write through to that env (real Lua upvalues)."""
+
+    __slots__ = ('parent',)
+
+    def __init__(self, parent):
+        super().__init__()
+        self.parent = parent
+
+    def __contains__(self, k):
+        if dict.__contains__(self, k):
+            return True
+        return self.parent is not None and k in self.parent
+
+    def get(self, k, d=None):
+        v = dict.get(self, k, _MISS)
+        if v is not _MISS:
+            return v
+        return self.parent.get(k, d) if isinstance(self.parent, dict) else d
+
+    def __getitem__(self, k):
+        if dict.__contains__(self, k):
+            return dict.__getitem__(self, k)
+        return self.parent[k]
+
+    def upvalue_set(self, name, value):
+        p = self.parent
+        while isinstance(p, _FuncEnv):
+            if dict.__contains__(p, name):
+                p[name] = value
+                return True
+            p = p.parent
+        if isinstance(p, dict) and name in p:
+            p[name] = value
+            return True
+        return False
+
+
 class LuaFunction:
     def __init__(self, params, body, closure, sandbox, is_vararg=False):
         self.params = params
@@ -98,7 +141,7 @@ class LuaFunction:
         self.is_vararg = is_vararg
 
     def call(self, args):
-        env = dict(self.closure)
+        env = _FuncEnv(self.closure)
         for i, param in enumerate(self.params):
             env[param] = args[i] if i < len(args) else None
         if self.is_vararg:
@@ -1402,7 +1445,11 @@ class LuaSandbox:
         for i, name in enumerate(names):
             n = name if isinstance(name, str) else self._get_name_str(name)
             if n:
-                env[n] = values[i] if i < len(values) else None
+                v = values[i] if i < len(values) else None
+                if isinstance(env, _FuncEnv) and not dict.__contains__(env, n) \
+                        and env.upvalue_set(n, v):
+                    continue
+                env[n] = v
 
     def _exec_assign(self, stmt, env):
         targets = getattr(stmt, 'targets', []) or []
@@ -1427,6 +1474,9 @@ class LuaSandbox:
         if cls == 'NameExpr':
             n = getattr(target, 'name', None)
             if n:
+                if isinstance(env, _FuncEnv) and not dict.__contains__(env, n) \
+                        and env.upvalue_set(n, value):
+                    return
                 env[n] = value
         elif cls == 'IndexExpr':
             obj = self._eval(getattr(target, 'obj', None), env)
@@ -1646,7 +1696,7 @@ class LuaSandbox:
         if is_method:
             params = ['self'] + params
         body = getattr(func_node, 'body', None)
-        return LuaFunction(params, body, dict(env), self, is_vararg)
+        return LuaFunction(params, body, env, self, is_vararg)
 
     # ─── Expressions ──────────────────────────────────────────────────
 
