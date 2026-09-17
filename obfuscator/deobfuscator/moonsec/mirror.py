@@ -161,10 +161,11 @@ def extract_literals(source):
     import re
     m = re.search(r'\br="([^"]*)"', source)
     r_lit = parse_lua_escapes(m.group(1)) if m else None
-    m2 = re.search(r'\bt\((\d+),"([^"]*)"', source)
-    f = int(m2.group(1)) if m2 else None
-    enc = parse_lua_escapes(m2.group(2)) if m2 else None
-    return r_lit, f, enc
+    payloads = [(int(m.group(1)), parse_lua_escapes(m.group(2)))
+                for m in re.finditer(r'\bt\((\d+),"([^"]*)"', source)]
+    f = payloads[0][0] if payloads else None
+    enc = payloads[0][1] if payloads else None
+    return r_lit, f, enc, payloads
 
 
 _BASE_GLOBALS = {
@@ -257,8 +258,13 @@ def _selftest():
     got = decode_payload(enc, f)
     chk('T7 decode_payload round-trips synthetic bytes', got == plain, '%r' % got)
 
+    syn = 'local x = t(107,"abc") local y = t(145,"defgh") return x'
+    rl, ff, ee, pl = extract_literals(syn)
+    chk('T8 extract_literals finds both payloads', ff == 107 and ee == b'abc'
+        and [p[0] for p in pl] == [107, 145] and pl[1][1] == b'defgh', str(pl))
+
     print('')
-    print('Result: %d/7' % (7 - len(fails)))
+    print('Result: %d/8' % (8 - len(fails)))
     if fails:
         print('[XX] FAILURES: %d' % len(fails))
         return 1
@@ -276,7 +282,7 @@ def main(argv=None):
         return _selftest()
     if a.sample:
         src = open(a.sample, encoding='utf-8', errors='replace').read()
-        r_lit, f, enc = extract_literals(src)
+        r_lit, f, enc, payloads = extract_literals(src)
         print('r_lit=%s f=%s enc=%s' % (len(r_lit) if r_lit else None, f,
                                         len(enc) if enc else None))
         if not (r_lit and enc):
@@ -293,6 +299,18 @@ def main(argv=None):
         print('stage2 entries=%d' % len(h2))
         strs = [v for v in h2.values() if isinstance(v, bytes)]
         print('stage2 string values=%d sample=%s' % (len(strs), [x[:24] for x in strs[:6]]))
+        for pi, (pf, penc) in enumerate(payloads[1:], start=3):
+            sx = decode_payload(penc, pf)
+            print('stage%d: f=%d decoded=%d head=%r' % (pi, pf, len(sx), sx[:40]))
+            gloN = dict(glo2)
+            gloN.update(h2)
+            hN, dN = parse_stream(sx, globals_map=gloN, initial_env=dict(h2))
+            kinds = {}
+            for v in hN.values():
+                kinds[type(v).__name__] = kinds.get(type(v).__name__, 0) + 1
+            print('stage%d entries=%d kinds=%s' % (pi, len(hN), kinds))
+            sb = [v for v in hN.values() if isinstance(v, bytes) and len(v) > 32]
+            print('stage%d long strings=%d sample=%s' % (pi, len(sb), [x[:60] for x in sb[:3]]))
         return 0
     ap.error('use --test or --sample')
 
