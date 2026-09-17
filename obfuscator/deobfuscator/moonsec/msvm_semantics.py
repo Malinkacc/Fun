@@ -488,6 +488,25 @@ def _merge_states(inner):
     return out
 
 
+def sm_states(var, items, max_state=MAX_STATES):
+    """Dynamic per-state expansion: walk ONE state at a time (no phantom
+    states -> no duplicated fall-through tails).  Returns the ordered
+    statement stream and the number of real states seen."""
+    full = []
+    seen = 0
+    for state in range(0, max_state + 1):
+        inner = defaultdict(list)
+        sm_expand(var, items, inner, {state})
+        stmts = inner.get(state, [])
+        if not stmts and state > 0:
+            break
+        full.extend(stmts)
+        seen = state + 1
+        if any(_is_terminator(s) for s in stmts):
+            break
+    return full, seen
+
+
 def _is_terminator(stmt_tokens):
     # pattern: VAR = - 2
     t = [x[1] for x in stmt_tokens]
@@ -1183,9 +1202,8 @@ def extract(sample_src, domain_max=160):
         for item in stream:
             if isinstance(item, tuple) and item[0] == 'SM':
                 _tag, var, witems = item
-                inner = defaultdict(list)
-                sm_expand(var, witems, inner, set(range(0, MAX_STATES + 1)))
-                full.extend(_merge_states(inner))
+                stmts, _nstates = sm_states(var, witems)
+                full.extend(stmts)
             else:
                 full.append(item)
         ex = exec_effects(full)
@@ -1207,12 +1225,86 @@ def extract(sample_src, domain_max=160):
         if not core:
             names = [('NOP', 'only pc step')] + [
                 (n, d) for n, d in names if n in ('STEP', 'LOADNEXT')]
+        # slot consumption: 1 + #refetch pairs (n=n+1 ; e=t[n]) in the stream
+        refetches = 0
+        prev_step = False
+        for st in full:
+            tt = [x[1] for x in st]
+            if tt[:1] == ['n'] and len(tt) >= 2 and ''.join(tt) .startswith('n=n+1'):
+                prev_step = True
+                continue
+            if prev_step and tt[:3] == ['e', '=', 't']:
+                refetches += 1
+                prev_step = False
+            elif tt[:1] == ['e'] and tt[:3] == ['e', '=', 't']:
+                refetches += 1
+                prev_step = False
+            else:
+                prev_step = False
+        # sub-op chain: partition effects at refetch markers, per partition
+        # keep resolved (non '?') names, collapse consecutive duplicates
+        chain = []
+        cur = []
+        ei = 0
+        eff_names = [n for n, _d in names]
+        eff_kinds = [e[0] for e in ex.effects]
+        marks = []
+        prev_step = False
+        for st in full:
+            tt = [x[1] for x in st]
+            joined = ''.join(tt)
+            if tt[:1] == ['n'] and joined.startswith('n=n+1'):
+                prev_step = True
+                continue
+            if prev_step and tt[:3] == ['e', '=', 't']:
+                marks.append(len(chain))
+                chain.append([])
+                prev_step = False
+                continue
+            if tt[:1] == ['e'] and tt[:3] == ['e', '=', 't']:
+                marks.append(len(chain))
+                chain.append([])
+                prev_step = False
+                continue
+            prev_step = False
+        # walk effects in order, splitting at refetch boundaries recorded
+        # during execution: rebuild via executor effects and STEP/LOADNEXT
+        eff_pairs = list(zip(eff_names, ['%s %s' % (n, d) if d else n
+                                         for n, d in names]))
+        part = []
+        parts = [part]
+        for nm, det in eff_pairs:
+            if nm in ('STEP', 'LOADNEXT'):
+                part = []
+                parts.append(part)
+                continue
+            part.append(det)
+        chain = []
+        for prt in parts:
+            clean = []
+            for det in prt:
+                nm = det.split(' ')[0]
+                if nm.endswith('?') and len(clean) \
+                        and clean[-1][0] == nm[:-1]:
+                    continue
+                clean.append((nm[:-1] if nm.endswith('?') else nm, det))
+            ded = []
+            for item in clean:
+                if ded and ded[-1][0] == item[0]:
+                    ded[-1] = item
+                    continue
+                ded.append(list(item))
+            if ded:
+                chain.append(ded)
+        consumed = 1 + refetches
         ops[op] = {
             'names': [n for n, _d in names],
             'details': ['%s %s' % (n, d) if d else n for n, d in names],
             'unresolved': ex.unresolved,
             'alts': ex.alts,
             'n_stmts': len(full),
+            'consumed': consumed,
+            'chain': chain,
         }
     return {'ops': ops, 'covered': sorted(ops)}
 

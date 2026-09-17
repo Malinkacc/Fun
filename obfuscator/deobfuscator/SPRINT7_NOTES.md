@@ -308,6 +308,52 @@ added.
   this mnemonic table (skip CLOSURE descriptors positionally; decode
   jumps/branches to labels; register-vs-immediate per mnemonic).
 
+## MoonSec V3 decompiler (slice 2b-10, `moonsec/msvm_decomp.py`)
+
+The chain-2b finale: the decoded proto tree lifts to READABLE LUA with real
+statements (the 2b-8 pseudo listing stays for raw reference).  Execution
+model proven on the real sample while building this:
+
+* Field map: instruction = [op, A, B, C]; VM fields e[g]/e[d]/e[c]/e[r] =
+  op/A/B/C.  EVERY control transfer uses **B** (`n=e[c]` + loop tail +1 ->
+  target slot B+1): JMP (152/28), TEST/TESTN/TESTSET, EQ/NE (C is the
+  compare operand, R or immediate), FORLOOP/FORPREP, EQ_K (59/96).
+  A TEST-like TRUE branch SKIPS the next slot -> the slot after a
+  conditional is dead padding (rendered as a comment).
+* EQ/NE direction: handlers are `if (A==C) then skip else goto` (and ~=
+  mirror), so the decompiler emits the goto under the NEGATED condition --
+  verified against the taunt leaf: `if r0 == "" then return
+  U["vzqmDbuPGFdLEJP"] end; return "Federal was here"`.
+* Superinstructions consume `1 + #refetch-pairs` slots (msvm_semantics
+  `consumed`); each chain element renders from its OWN slot's A/B/C
+  (e.g. op 25 = 3x GETGLOBAL + GETTABLE + tailcall/return chain over 7
+  slots).  CLOSURE-with-descriptors (112/123, handler
+  `for d=1,e[r] do n=n+1; local e=t[n]; if e[g]==24 ...`) consumes 1+C
+  slots; op 8/111 consume 1 (proto from constants).
+* Opcode 24 never dispatches (slot body `n=-2`); op-24 slots are
+  descriptors/fillers.  Anti-tamper regions contain intentionally DEAD
+  slots (TEST/JMP with non-integer targets, orphan op-24); all of them
+  are rendered as explicit `--[[dead ...]]` comments, nothing dropped.
+* Real sample: 516 slots -> 368 macros, 12 dead/unresolved (2.3%,
+  almost all in the root's anti-tamper block), output
+  `msvm_decompiled.lua` with labels/gotos, resolved constants, upvalue
+  NAMES (`r6 = U["getfenv"]`) and per-slot provenance comments.
+
+`--test` is 6/6 (statements with reg/literal operands; JMP/label/TEST-skip;
+table ops; descriptor consumption; superinstr per-slot rendering; dead-slot
+marking).  opmap STEP 24 added.  `msvm_semantics` now also emits per-slot
+`chain` entries as [name, detail] pairs plus `consumed`.
+
+## Chain 2b status (MoonSec V3 -> plaintext)
+
+COMPLETE end-to-end: payload mirror (2b-1..3) -> proto tree at seed 252
+(2b-5/2b-6, 100.0% consume) -> operand profiles (2b-7) -> pseudo listing
+(2b-8) -> dispatch extraction (2b-9p1) -> mnemonic table (2b-9p2) ->
+readable Lua decompiler (2b-10).  Remaining known limits: dead-slot regions
+are marked not interpreted; a few superinstr chain entries keep candidate
+ambiguity (rendered from the most-resolved variant); vararg-boundary forms
+(`RETURN_m`, multres calls) render with `...` markers.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -318,10 +364,10 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-23 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-24 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
-msvm_dispatch (22), moonsec msvm_semantics (23).
+msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24).
