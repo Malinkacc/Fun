@@ -66,9 +66,14 @@ def bit_get(l, e):
     return 1 if (l % (p + p)) >= p else 0
 
 
-def parse_stream(stream, transformer=None):
-    """Mirror of the MoonSec env-stream parser; returns (h, d)."""
+def parse_stream(stream, transformer=None, globals_map=None, initial_env=None):
+    """Mirror of the MoonSec env-stream parser; returns (h, d).
+    d is seeded from globals_map (getfenv stand-in); h can be seeded from a
+    previous stage (the real Lua reuses one h table across c(r) and c(S));
+    \\002 uses the transformer slot already installed into h."""
     pos = 0
+    d = dict(globals_map or {})
+    h = dict(initial_env or {})
 
     def take(k):
         nonlocal pos
@@ -76,7 +81,6 @@ def parse_stream(stream, transformer=None):
         pos += k
         return s
 
-    h, d = {}, {}
     while True:
         m = take(1)
         if m == b'\x05' or m == '\x05':
@@ -85,7 +89,8 @@ def parse_stream(stream, transformer=None):
         ln = ln[0] if isinstance(ln, (bytes, bytearray)) else ord(ln)
         val = take(ln)
         if m == b'\x02' or m == '\x02':
-            val = transformer(val) if transformer else val
+            fn = transformer or h.get(b'YZOfVgIl') or h.get('YZOfVgIl')
+            val = fn(val) if fn else val
         elif m == b'\x03' or m == '\x03':
             val = val != (b'\x00' if isinstance(val, bytes) else '\x00')
         elif m == b'\x06' or m == '\x06':
@@ -94,12 +99,86 @@ def parse_stream(stream, transformer=None):
         elif m == b'\x04' or m == '\x04':
             val = d.get(val)
         elif m == b'\x00' or m == '\x00':
-            k2 = take(1)
-            k2 = k2[0] if isinstance(k2, (bytes, bytearray)) else ord(k2)
+            ln2 = take(1)
+            ln2 = ln2[0] if isinstance(ln2, (bytes, bytearray)) else ord(ln2)
+            name = take(ln2)
             base = d.get(val)
-            val = (base, k2)
+            if isinstance(base, dict):
+                val = base.get(name)
+            else:
+                val = (base, name)
         key = take(8)
         h[key] = val
+    return h, d
+
+
+def parse_lua_escapes(text):
+    """Decode a Lua string literal body with decimal escapes (\\116) to bytes."""
+    out = bytearray()
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '\\' and i + 1 < len(text):
+            j = i + 1
+            if text[j].isdigit():
+                k = j
+                while k < len(text) and k - j < 3 and text[k].isdigit():
+                    k += 1
+                out.append(int(text[j:k]) & 0xff)
+                i = k
+                continue
+            if text[j] == 'n':
+                out.append(10); i = j + 1; continue
+            if text[j] == 't':
+                out.append(9); i = j + 1; continue
+            out.append(ord(text[j])); i = j + 1; continue
+        out.append(ord(ch) & 0xff)
+        i += 1
+    return bytes(out)
+
+
+def decode_payload(enc, f):
+    """Mirror of the MoonSec payload decoder t(f, enc):
+    sbox = first 16 chars mapped to 0..15; then char pairs -> nibbles ->
+    byte = (hi*16 + lo + c) % 256 with carry c = f*(k+1)."""
+    n3 = {}
+    for i in range(16):
+        n3[enc[i:i + 1] if isinstance(enc, str) else enc[i:i + 1].decode('latin1')] = i
+    body = enc[16:] if isinstance(enc, str) else enc[16:].decode('latin1')
+    out = bytearray()
+    c = 0
+    for k in range(0, len(body) - 1, 2):
+        idx = k // 2
+        c = f + c
+        hi = n3.get(body[k], 0)
+        lo = n3.get(body[k + 1], 0)
+        out.append((hi * 16 + lo + c) % 256)
+    return bytes(out)
+
+
+def extract_literals(source):
+    """Pull the env-stream literal r="..." and the payload call t(NN, "...")."""
+    import re
+    m = re.search(r'\br="([^"]*)"', source)
+    r_lit = parse_lua_escapes(m.group(1)) if m else None
+    m2 = re.search(r'\bt\((\d+),"([^"]*)"', source)
+    f = int(m2.group(1)) if m2 else None
+    enc = parse_lua_escapes(m2.group(2)) if m2 else None
+    return r_lit, f, enc
+
+
+_BASE_GLOBALS = {
+    b'tonumber': lambda b: float(b) if b'.' in b else int(b),
+    b'string': {b'char': lambda b: bytes([b[0]]) if isinstance(b, (bytes, bytearray)) else bytes([ord(b[0])]),
+                b'sub': None, b'byte': None},
+    b'table': {b'concat': None, b'insert': None},
+}
+
+
+def bootstrap_env(r_lit):
+    """Run the env stream through parse_stream with getfenv-like globals."""
+    glo = dict(_BASE_GLOBALS)
+    h, d = parse_stream(r_lit, transformer=None, globals_map=glo)
     return h, d
 
 
@@ -156,8 +235,30 @@ def _selftest():
         len(h) == 3 and vals[0] is True and vals[1] == ('wrapper', b'xyz')
         and vals[2] == ('wrapper', b'xyz'), str(vals))
 
+    r_syn = (b'\x04\x08tonumberYZOfVgIl'
+             b'\x00\x06string\x04charDXLBIEVz'
+             b'\x05')
+    glo = {b'tonumber': lambda b: int(b), b'string': {b'char': 'CHARFN'}}
+    h6, d6 = parse_stream(r_syn, globals_map=glo)
+    ok6 = h6.get(b'YZOfVgIl') is glo[b'tonumber'] and h6.get(b'DXLBIEVz') == 'CHARFN'
+    chk('T6 bootstrap env: global + method entries', ok6, str(list(h6.items())[:2]))
+
+    sbox = 'abcdefghijklmnop'
+    plain = b'HI!'
+    f = 107
+    body = []
+    c = 0
+    for k, b in enumerate(plain):
+        c = f + c
+        raw = (b - c) % 256
+        body.append(sbox[raw // 16])
+        body.append(sbox[raw % 16])
+    enc = sbox + ''.join(body)
+    got = decode_payload(enc, f)
+    chk('T7 decode_payload round-trips synthetic bytes', got == plain, '%r' % got)
+
     print('')
-    print('Result: %d/5' % (5 - len(fails)))
+    print('Result: %d/7' % (7 - len(fails)))
     if fails:
         print('[XX] FAILURES: %d' % len(fails))
         return 1
@@ -169,10 +270,31 @@ def main(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description='MoonSec Python mirror')
     ap.add_argument('--test', action='store_true')
+    ap.add_argument('--sample', default=None)
     a = ap.parse_args(argv)
     if a.test:
         return _selftest()
-    ap.error('use --test')
+    if a.sample:
+        src = open(a.sample, encoding='utf-8', errors='replace').read()
+        r_lit, f, enc = extract_literals(src)
+        print('r_lit=%s f=%s enc=%s' % (len(r_lit) if r_lit else None, f,
+                                        len(enc) if enc else None))
+        if not (r_lit and enc):
+            print('[XX] literals not found')
+            return 1
+        glo = dict(_BASE_GLOBALS)
+        h1, d1 = parse_stream(r_lit, globals_map=glo)
+        print('stage1 env entries=%d keys=%s' % (len(h1), sorted(h1.keys())))
+        s_stream = decode_payload(enc, f)
+        print('decoded stream bytes=%d head=%r' % (len(s_stream), s_stream[:48]))
+        glo2 = dict(glo)
+        glo2.update(h1)
+        h2, d2 = parse_stream(s_stream, globals_map=glo2, initial_env=h1)
+        print('stage2 entries=%d' % len(h2))
+        strs = [v for v in h2.values() if isinstance(v, bytes)]
+        print('stage2 string values=%d sample=%s' % (len(strs), [x[:24] for x in strs[:6]]))
+        return 0
+    ap.error('use --test or --sample')
 
 
 if __name__ == '__main__':
