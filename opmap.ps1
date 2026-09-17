@@ -19,8 +19,10 @@ if (-not (Test-Path $sample)) {
     exit 1
 }
 New-Item -ItemType Directory -Force -Path "out" | Out-Null
-py -m obfuscator.deobfuscator.luraph.vm_opcodes $sample --static --static-json "out\v146map.json" --report "out\v146map.txt" | Select-Object -First 1
-if ($LASTEXITCODE -ne 0) { $fail = 1; Write-Host "[XX] static map FAILED" } else { Write-Host "[OK] static map written: out\v146map.json + out\v146map.txt" }
+$o2 = py -m obfuscator.deobfuscator.luraph.vm_opcodes $sample --static --static-json "out\v146map.json" --report "out\v146map.txt" 2>&1
+$c2 = $LASTEXITCODE
+$o2 | Select-Object -First 1
+if ($c2 -ne 0) { $fail = 1; Write-Host "[XX] static map FAILED"; $o2 | Select-Object -Last 5 } else { Write-Host "[OK] static map written: out\v146map.json + out\v146map.txt" }
 
 Write-Host ""
 Write-Host "== STEP 3: vm_lift self-test (expect 'Result: 9/9' + '[OK] ALL PASSED')"
@@ -29,8 +31,10 @@ if ($LASTEXITCODE -ne 0) { $fail = 1; Write-Host "[XX] vm_lift self-test FAILED"
 
 Write-Host ""
 Write-Host "== STEP 4: lift real VM frames of the sample (instant; first 12 lines shown)"
-py -m obfuscator.deobfuscator.luraph.vm_lift --demo --max 3 --out "out\lifted.txt" | Select-Object -First 12
-if ($LASTEXITCODE -ne 0) { $fail = 1; Write-Host "[XX] demo lift FAILED" } else { Write-Host "[OK] lifted code written: out\lifted.txt" }
+$o4 = py -m obfuscator.deobfuscator.luraph.vm_lift --demo --max 3 --out "out\lifted.txt" 2>&1
+$c4 = $LASTEXITCODE
+$o4 | Select-Object -First 12
+if ($c4 -ne 0) { $fail = 1; Write-Host "[XX] demo lift FAILED"; $o4 | Select-Object -Last 5 } else { Write-Host "[OK] lifted code written: out\lifted.txt" }
 
 Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
