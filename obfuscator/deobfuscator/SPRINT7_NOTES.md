@@ -163,6 +163,34 @@ needed).  Synthetic writer switched to LE (`_w4le`, `_w_float`='<d').
   (`function ne(...)` @183337) and the runtime opcode domain (~77..114), then
   lift the proto tree to readable Lua like the Luraph pipeline.
 
+## MoonSec V3 opcode operand-shape profile (slice 2b-7, `moonsec/msvm_opcodes.py`)
+
+First 2b-7 artifact: an EMPIRICAL operand-shape profile of every proto opcode,
+computed from the 2b-6 lifted tree (516 instrs, 90 distinct opcodes).  The VM
+interpreter dispatch is a ~53 KB obfuscated state machine and full-sample
+dynamic tracing is blocked by sandbox recursion limits, so operand shapes are
+the reliable evidence base for the mnemonic mapping (next slice).
+
+Per opcode: count, withB/withC (operand slots present), Bconst/Cconst (slot
+filled by a non-numeric constant-pool value), Amin/Amax (A-field range).
+Representative shapes already discriminate effect classes:
+
+    op 152 x37  B:0/37 C:0/0  A:[0..0]    always-B, never-C, A fixed  -> unary/jump-like
+    op  24 x27  B:0/27 C:0/24 A:[0..26]   B+C, wide A                 -> binary (arith/cmp)
+    op  12 x25  B:7/25 C:0/5  A:[0..24]   B often const               -> LOADK/const-heavy
+    op 143 x12  B:0/12 C:0/12 A:[3..20]   always B+C                  -> binary
+    op 148 x12  B:0/12 C:0/12 A:[3..12]   always B+C                  -> binary
+    op  65 x10  B:0/10 C:0/10 A:[0..0]    always B+C, A fixed         -> call/settable-like
+
+Caveat: a substituted NUMERIC const is an int after int_fix, so Bconst/Cconst
+count only non-numeric substitutions; withB/withC and the A range are exact.
+
+`--test` is 4/4 (synthetic tree with known shapes).  `--protos protos.json`
+prints the top-N shapes and writes `opcode_profile.json`.  opmap STEP 20 added.
+
+* Next (2b-8): correlate each opcode's shape against the VM dispatch handler
+  bodies to assign Lua 5.1 mnemonics, then emit a lifter (proto tree -> Lua).
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -173,9 +201,9 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-19 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-20 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
-(19).
+(19), moonsec msvm_opcodes (20).
