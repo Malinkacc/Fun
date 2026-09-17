@@ -86,6 +86,13 @@ $o11 | Select-Object -Last 2
 if ($c11 -ne 0) { $fail = 1; Write-Host "[XX] vm_tables self-test FAILED"; $o11 | Select-Object -Last 6 } else { Write-Host "[OK] vm_tables self-test passed" }
 
 Write-Host ""
+Write-Host "== STEP 12: moonveil vm_lift self-test (expect 'Result: 6/6' + '[OK] ALL PASSED')"
+$o12 = py -m obfuscator.deobfuscator.moonveil.vm_lift --test 2>&1
+$c12 = $LASTEXITCODE
+$o12 | Select-Object -Last 2
+if ($c12 -ne 0) { $fail = 1; Write-Host "[XX] vm_lift(moonveil) self-test FAILED"; $o12 | Select-Object -Last 6 } else { Write-Host "[OK] moonveil vm_lift self-test passed" }
+
+Write-Host ""
 Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=..."
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
