@@ -191,6 +191,27 @@ prints the top-N shapes and writes `opcode_profile.json`.  opmap STEP 20 added.
 * Next (2b-8): correlate each opcode's shape against the VM dispatch handler
   bodies to assign Lua 5.1 mnemonics, then emit a lifter (proto tree -> Lua).
 
+## MoonSec V3 proto-tree lifter (slice 2b-8, `moonsec/msvm_lift.py`)
+
+Renders the lifted proto tree as readable pseudo-Lua: one labelled block per
+proto (`== proto 0 (nparams=.. consts=.. instrs=.. nested=..)`), the constant
+pool resolved to literals (strings quoted, non-utf8 bytes as `x'<hex>'` from the
+protos.json `__bytes__` form), instructions as `#i op=.. A=.. B=.. C=..` with
+substituted constants shown as literals and absent slots as `_`, nested protos
+indented one level per depth.
+
+Honesty: a raw int operand is register-or-immediate and is NOT resolvable from
+the lifted tree alone (needs per-opcode semantics), so ints are printed
+verbatim; only non-int operands are rendered as literals.  Real sample lifts to
+627 lines (`lifted_msvm.txt`), e.g.
+`#1 op=8 A=0 B='MoonSec_StringsHiddenAttr' C=_`.
+
+`--test` is 4/4.  `--protos protos.json` writes `lifted_msvm.txt`.  opmap
+STEP 21 added.
+
+* Next (2b-9): opcode mnemonic mapping (shapes + VM dispatch handler bodies ->
+  Lua 5.1 names), then upgrade the lifter from pseudo-Lua to real statements.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -201,9 +222,9 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-20 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-21 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
-(19), moonsec msvm_opcodes (20).
+(19), moonsec msvm_opcodes (20), moonsec msvm_lift (21).
