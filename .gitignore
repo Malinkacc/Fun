@@ -10,3 +10,6 @@ _captures/
 
 # user-side verification output (opmap.ps1)
 out/
+
+# local bot secrets (never commit)
+bot/bot_secret.json

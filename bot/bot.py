@@ -35,8 +35,32 @@ except Exception as _e:
     print(f"[bot] ⚠️ Ошибка прогрева: {_e}")
 
 # ── Константы ──────────────────────────────────────────────────────────────────
-TOKEN = "MTEwMTkyNTQwNzUyNTE4MzY3Mg.GciVIo.WosH0oNUBcJ_h-wpFatzqwAhx-wA95o9P-G1zU"
-GUILD_ID = 1123677106799394888
+# Secrets live OUTSIDE git: env var -> bot/bot_secret.json -> empty.
+# bot.py itself never contains a real token (repo is public).
+def _nzl_secrets() -> dict:
+    try:
+        with open(os.path.join(os.path.dirname(__file__), "bot_secret.json"),
+                  encoding="utf-8-sig") as _f:
+            return json.load(_f)
+    except Exception:
+        return {}
+
+
+_nzl_sec = _nzl_secrets()
+TOKEN = str(os.environ.get("NZL_DISCORD_TOKEN") or _nzl_sec.get("token") or "").strip()
+GUILD_ID = str(os.environ.get("NZL_GUILD_ID") or _nzl_sec.get("guild_id") or "").strip()
+if not TOKEN:
+    print("=" * 60)
+    print("\u041d\u0435\u0442 \u0442\u043e\u043a\u0435\u043d\u0430! \u0421\u043e\u0437\u0434\u0430\u0439 \u0444\u0430\u0439\u043b bot\\bot_secret.json:")
+    print('  {"token": "\u0422\u041e\u041a\u0415\u041d", "guild_id": "ID_\u0421\u0415\u0420\u0412\u0415\u0420\u0410"}')
+    print("\u0422\u043e\u043a\u0435\u043d: Discord Developer Portal -> Bot -> Reset Token -> Copy")
+    print("ID \u0441\u0435\u0440\u0432\u0435\u0440\u0430: \u0412\u043a\u043b\u044e\u0447\u0438 \u0420\u0435\u0436\u0438\u043c \u0440\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a\u0430, \u041f\u041a\u041c \u043f\u043e \u0441\u0435\u0440\u0432\u0435\u0440\u0443 -> \u041a\u043e\u043f\u0438\u0440\u043e\u0432\u0430\u0442\u044c ID")
+    print("=" * 60)
+    raise SystemExit(1)
+if not GUILD_ID:
+    print("\u041d\u0435\u0442 GUILD_ID! \u0414\u043e\u0431\u0430\u0432\u044c \u0432 bot\\bot_secret.json \u043f\u043e\u043b\u0435 \"guild_id\".")
+    raise SystemExit(1)
+GUILD_ID = int(GUILD_ID)
 BOT_VERSION = "1.2"
 
 COLOR_OK = 0x00FF88
