@@ -944,6 +944,6 @@ if __name__ == "__main__":
 import importlib.util as _ilu
 _s7p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprint7.py")
 _s7spec = _ilu.spec_from_file_location("nzl_sprint7", _s7p)
-_s7 = importlib.util.module_from_spec(_s7spec)
+_s7 = _ilu.module_from_spec(_s7spec)
 _s7spec.loader.exec_module(_s7)
 _s7.register_sprint7(bot, globals())
