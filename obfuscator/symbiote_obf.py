@@ -240,23 +240,28 @@ def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
     # Decrypt
     parts.append(f'local dd=t(bb:sub(1,{orig_len}),cc)')
     
-    # Execute via loadstring with error handling
+    # Debug: show first 200 chars of decrypted code
     parts.append(
-        'local ee=loadstring or load '
-        'if ee then '
-        'local ok,fn_or_err=pcall(ee,dd) '
-        'if ok and type(fn_or_err)=="function" then '
-        'local ok2,err2=pcall(fn_or_err) '
-        'if not ok2 then error("Execution error: "..tostring(err2)) end '
-        'elseif ok then '
-        'error("loadstring returned: "..type(fn_or_err)) '
-        'else '
-        'error("loadstring failed: "..tostring(fn_or_err)) '
-        'end '
-        'else '
-        'error("loadstring not available") '
-        'end'
+        'error("Decrypted code (first 200 chars): " .. tostring(dd):sub(1,200) .. " ... (total length: " .. #dd .. ")")'
     )
+    
+    # Execute via loadstring with error handling (DISABLED FOR DEBUG)
+    # parts.append(
+    #     'local ee=loadstring or load '
+    #     'if ee then '
+    #     'local ok,fn_or_err=pcall(ee,dd) '
+    #     'if ok and type(fn_or_err)=="function" then '
+    #     'local ok2,err2=pcall(fn_or_err) '
+    #     'if not ok2 then error("Execution error: "..tostring(err2)) end '
+    #     'elseif ok then '
+    #     'error("loadstring returned: "..type(fn_or_err)) '
+    #     'else '
+    #     'error("loadstring failed: "..tostring(fn_or_err)) '
+    #     'end '
+    #     'else '
+    #     'error("loadstring not available") '
+    #     'end'
+    # )
     
     # Join everything
     result = ' '.join(parts)
