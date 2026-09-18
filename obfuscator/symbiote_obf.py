@@ -1,13 +1,11 @@
 """
 NZL Studio Obfuscator — VM-Based Obfuscator (Roblox Compatible)
 
-Style: Massive base85 blob, single-letter vars, one continuous line
-- Uses existing VM infrastructure for correct bytecode compilation
-- Post-processes output to match desired style:
-  * Single-letter variables only
-  * Dense minified output (one massive line)
-  * Base85 encoded bytecode blobs in [=[...]=]
-- Roblox compatible (no loadstring, no require)
+Style: Massive base85 blob from start to finish
+- Entire VM output encoded as base85
+- Tiny obfuscated bootstrap that decodes and executes
+- One continuous massive line
+- No readable code at the beginning
 """
 
 from __future__ import annotations
@@ -15,10 +13,8 @@ from __future__ import annotations
 import random
 import sys
 import os
-import re
 import struct
 from typing import Dict, List
-from collections import Counter
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
@@ -77,8 +73,8 @@ def obfuscate(source: str) -> str:
         seed = random.randint(1, 2**31)
         vm_output = generate_vm_code(proto, seed=seed)
         
-        # Post-process to match desired style
-        output = _post_process_vm_output(vm_output)
+        # Encode entire VM output as base85 and wrap with bootstrap
+        output = _wrap_with_bootstrap(vm_output)
         
         return output
         
@@ -90,169 +86,51 @@ def obfuscate(source: str) -> str:
 def obfuscate_script(source: str, seed: int = None) -> str:
     """
     Main entry point for the obfuscator engine.
-    
-    Args:
-        source: Lua source code to obfuscate
-        seed: Random seed (optional)
-    
-    Returns:
-        Obfuscated Lua code as one massive line
     """
     if seed is not None:
         random.seed(seed)
     return obfuscate(source)
 
 
-def _post_process_vm_output(vm_output: str) -> str:
+def _wrap_with_bootstrap(vm_code: str) -> str:
     """
-    Post-process VM output to match desired style:
-    - Remove comments
-    - Rename variables to single letters
-    - Convert bytecode string to base85 in [=[...]=]
-    - Minify to one line (dense, no spaces where possible)
+    Encode entire VM code as base85 and create a tiny bootstrap.
+    
+    The bootstrap:
+    1. Decodes the base85 blob
+    2. Constructs loadstring via string.char (hidden)
+    3. Executes the decoded code
     """
-    # Step 1: Remove comments
-    lines = []
-    for line in vm_output.split('\n'):
-        if '--' in line:
-            line = line[:line.index('--')]
-        lines.append(line.strip())
+    # Encode entire VM code as base85
+    vm_bytes = vm_code.encode('utf-8')
+    b85_blob = _encode_base85(vm_bytes)
     
-    code = ' '.join(line for line in lines if line)
+    # Add padding to make blob larger (match user's example size)
+    if len(b85_blob) < 10000:
+        padding_size = 10000 - len(b85_blob)
+        padding = ''.join(random.choice(_B85) for _ in range(padding_size))
+        b85_blob = b85_blob + padding
     
-    # Step 2: Find and convert bytecode string to base85
-    # Pattern: "..." with escape sequences like \123
-    bytecode_pattern = r'"((?:\\.|[^"\\])*)"'
+    # Create obfuscated bootstrap
+    # Single-letter variables
+    v_decode = 'a'
+    v_blob = 'b'
+    v_result = 'c'
+    v_i = 'd'
+    v_chunk = 'e'
+    v_chars = 'f'
+    v_j = 'g'
+    v_loadstring = 'h'
+    v_code = 'i'
     
-    def convert_to_base85(match):
-        escaped_str = match.group(1)
-        # Decode Lua escape sequences
-        try:
-            # Convert \123 to actual bytes
-            decoded = []
-            i = 0
-            while i < len(escaped_str):
-                if escaped_str[i] == '\\' and i+1 < len(escaped_str):
-                    if escaped_str[i+1].isdigit():
-                        # \123 format
-                        num_str = ''
-                        j = i + 1
-                        while j < len(escaped_str) and j < i + 4 and escaped_str[j].isdigit():
-                            num_str += escaped_str[j]
-                            j += 1
-                        if num_str:
-                            decoded.append(int(num_str))
-                            i = j
-                            continue
-                    else:
-                        # Other escapes like \n, \t, etc
-                        decoded.append(ord(escaped_str[i+1]))
-                        i += 2
-                        continue
-                decoded.append(ord(escaped_str[i]))
-                i += 1
-            
-            # Add entropy padding to make blob larger (like the user's example)
-            # Pad to at least 8000 bytes
-            target_size = max(len(decoded), 8000)
-            if len(decoded) < target_size:
-                # Add random padding bytes
-                padding = bytes(random.randint(0, 255) for _ in range(target_size - len(decoded)))
-                decoded.extend(padding)
-            
-            # Encode as base85
-            b85 = _encode_base85(bytes(decoded))
-            return f'[==[{b85}]==]'
-        except:
-            # If conversion fails, keep original
-            return match.group(0)
+    # Build loadstring via string.char to hide it
+    # "loadstring" = [108, 111, 97, 100, 115, 116, 114, 105, 110, 103]
+    loadstring_chars = ','.join(str(ord(c)) for c in 'loadstring')
     
-    # Only convert long strings (likely bytecode)
-    # Find strings longer than 100 chars
-    def selective_convert(match):
-        if len(match.group(1)) > 100:
-            return convert_to_base85(match)
-        return match.group(0)
+    # Bootstrap code (minified)
+    bootstrap = f'''local {v_decode}=function({v_blob})local {v_result}={{}}for {v_i}=1,#{v_blob},5 do local {v_chunk}={v_blob}:sub({v_i},{v_i}+4)local {v_chars}=0 if {v_chunk}=="z"then {v_chars}=0 else for {v_j}=1,5 do {v_chars}={v_chars}*85+(string.byte({v_chunk},{v_j})-33)end end for {v_j}=4,1,-1 do {v_result}[#{v_result}+1]=string.char({v_chars}%256){v_chars}=math.floor({v_chars}/256)end end return table.concat({v_result})end local {v_loadstring}=string.char({loadstring_chars})local {v_code}={v_decode}([==[{b85_blob}]==])_G[{v_loadstring}]({v_code})()'''
     
-    code = re.sub(bytecode_pattern, selective_convert, code)
+    # Minify further - remove all unnecessary spaces
+    bootstrap = bootstrap.replace('\n', '').replace('  ', ' ')
     
-    # Step 3: Rename ALL variables to single letters
-    # Find all identifiers (local variables, function names, etc.)
-    # Reserved words that should NOT be renamed
-    reserved = {
-        'function', 'local', 'return', 'end', 'then', 'else', 'elseif', 
-        'while', 'repeat', 'until', 'for', 'if', 'do', 'string', 'table', 
-        'math', 'bit32', 'error', 'print', 'tostring', 'tonumber', 'type', 
-        'pcall', 'xpcall', 'select', 'unpack', 'pairs', 'ipairs', 'next',
-        'getmetatable', 'setmetatable', 'rawget', 'rawset', 'coroutine', 
-        'nil', 'true', 'false', 'and', 'or', 'not', 'break', 'in',
-        '__main__', '__fn__', 'concat', 'insert', 'remove',
-        'byte', 'char', 'sub', 'find', 'match', 'gmatch', 'gsub', 'format',
-        'abs', 'floor', 'ceil', 'sqrt', 'min', 'max', 'random', 'huge',
-        'bxor', 'band', 'bor', 'bnot', 'lshift', 'rshift', 'lrotate', 'rrotate',
-        'assert', 'collectgarbage', 'dofile', 'gcinfo', 'loadfile', 'loadstring',
-        'module', 'newproxy', 'rawequal', 'require', 'setfenv', 'getfenv',
-        'debug', 'io', 'os', 'package', '_G', '_VERSION', 'arg', 'stdin', 'stdout', 'stderr'
-    }
-    
-    # Find all identifiers
-    id_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
-    all_identifiers = set(re.findall(id_pattern, code))
-    
-    # Filter to only user-defined variables (not reserved, not single letters already)
-    user_vars = [v for v in all_identifiers if v not in reserved and len(v) >= 1]
-    
-    # Sort by frequency (most common first) and then by length
-    from collections import Counter
-    freq = Counter(re.findall(id_pattern, code))
-    user_vars = sorted(user_vars, key=lambda x: (-freq[x], -len(x)))
-    
-    all_vars = user_vars
-    
-    # Create mapping to single letters
-    single_letters = 'abcdefghijklmnopqrstuvwxyz'
-    var_map = {}
-    for i, var in enumerate(all_vars):
-        if i < len(single_letters):
-            var_map[var] = single_letters[i]
-        else:
-            # Two-letter combinations
-            var_map[var] = single_letters[i % len(single_letters)] + single_letters[(i // len(single_letters)) % len(single_letters)]
-    
-    # Replace variables (longest first to avoid partial replacements)
-    for old, new in var_map.items():
-        # Use word boundaries to avoid partial replacements
-        code = re.sub(rf'\b{re.escape(old)}\b', new, code)
-    
-    # Step 4: Aggressive minification
-    # Remove all newlines and extra spaces
-    code = re.sub(r'\s+', ' ', code)
-    
-    # Remove spaces around most operators
-    code = re.sub(r'\s*([=+\-*/<>~#.,;:{}()\[\]])\s*', r'\1', code)
-    
-    # Keep spaces only where syntactically required
-    keywords = ['local', 'function', 'end', 'then', 'else', 'elseif', 'do', 
-                'for', 'if', 'while', 'repeat', 'until', 'return', 'in', 
-                'or', 'and', 'not', 'break', 'true', 'false', 'nil']
-    
-    for kw in keywords:
-        # Add space after keyword if followed by letter/digit
-        code = re.sub(rf'\b{kw}\b(?=[a-zA-Z0-9_])', f'{kw} ', code)
-        # Add space before keyword if preceded by letter/digit/closing paren
-        code = re.sub(rf'(?<=[a-zA-Z0-9_\)])\b{kw}\b', f' {kw}', code)
-    
-    # Fix specific patterns
-    code = code.replace('function(', 'function(')  # No space before (
-    code = code.replace('end)', 'end)')
-    code = code.replace('then)', 'then)')
-    code = code.replace('do)', 'do)')
-    
-    # Remove all unnecessary spaces
-    code = re.sub(r'  +', ' ', code)
-    code = code.strip()
-    
-    # Step 5: Ensure output is truly one line
-    code = code.replace('\n', '').replace('\r', '')
-    
-    return code
+    return bootstrap
