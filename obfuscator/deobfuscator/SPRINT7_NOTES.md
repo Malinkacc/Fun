@@ -567,6 +567,29 @@ cycle back-goto; equal targets; temp bool-build; version-correct
 dataflow).  opmap STEP 31.  Also fixed: `not` rendering lost its operand
 (ternary precedence) in block_lift.render_expr.
 
+## WeAreDevs closure map (slice 2c-5, `wearedevs/closures.py`)
+
+The dispatch tree is SHARED by all closures; creations are direct maker
+calls `maker(STATE, {upvalues})` inside leaf bodies (494 in-tree) plus
+the tail main `B(4635360,{})`:
+
+* collected: **494 creations -> 495 closures (incl. main)**; per-closure
+  BFS (fresh visited per root) PARTITIONS the tree: total regions
+  3355 / 3362 leaves (99.8%; the 7 left = decoy islands);
+* inventory: main=75 regions; the biggest closure is 99 regions (state
+  4121693 -- larger than main), then 73/47/45/42/40/38/38/36...;
+  395 closures are tiny (<10 regions -- getters/setters/wrappers);
+  size histogram: <10:395, 10-19:55, 20-29:25, 30-39:13, 40-49:4,
+  70-79:2, 90-99:1;
+* this is the FUNCTION INVENTORY of the original (Roblox GUI-lib)
+  program recovered purely statically -- call-graph skeleton complete
+  (names of closures = future slice: registration writes W[id]=name).
+
+Output: `wd_closures.json` (state -> maker/def_leaf/entry_leaf/regions/
+bodies/ifs/gotos).  `--test` is 6/6 (creation collection; non-maker
+ignored; non-const state ignored; varargs B; island BFS sizes; re-run
+stability).  opmap STEP 32.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -577,7 +600,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-31 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-32 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -586,4 +609,4 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
 (27), wearedevs rt_names (28), wearedevs block_lift (29), coverage panel
-(30), wearedevs cfg_lift (31).
+(30), wearedevs cfg_lift (31), wearedevs closures (32).

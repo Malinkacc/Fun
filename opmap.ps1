@@ -227,6 +227,13 @@ $c31 = $LASTEXITCODE
 $o31 | Select-Object -Last 2
 if ($c31 -ne 0) { $fail = 1; Write-Host "[XX] cfg_lift self-test FAILED"; $o31 | Select-Object -Last 6 } else { Write-Host "[OK] wearedevs cfg_lift self-test passed" }
 
-Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26..31 self-test lines"
+Write-Host ""
+Write-Host "== STEP 32: wearedevs closures self-test (closure map, expect 6/6)"
+$o32 = py -m obfuscator.deobfuscator.wearedevs.closures --test 2>&1
+$c32 = $LASTEXITCODE
+$o32 | Select-Object -Last 2
+if ($c32 -ne 0) { $fail = 1; Write-Host "[XX] closures self-test FAILED"; $o32 | Select-Object -Last 6 } else { Write-Host "[OK] wearedevs closures self-test passed" }
+
+Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26..32 self-test lines"
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
