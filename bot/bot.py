@@ -40,7 +40,7 @@ except Exception as _e:
     print(f"[bot] ⚠️ Ошибка прогрева: {_e}")
 
 # ── Константы ──────────────────────────────────────────────────────────────────
-TOKEN = "MTEwMTkyNTQwNzUyNTE4MzY3Mg.GXTSzE.5MTlGmMbZ79iNvZqMfgx1vIfG9nd-F2bv0DS1Q"
+TOKEN = "MTEwMTkyNTQwNzUyNTE4MzY3Mg.GciVIo.WosH0oNUBcJ_h-wpFatzqwAhx-wA95o9P-G1zU"
 GUILD_ID = 1123677106799394888
 BOT_VERSION = "1.2"
 
