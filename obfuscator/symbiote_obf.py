@@ -1,12 +1,13 @@
 """
-NZL Studio Obfuscator — Advanced VM Obfuscator
+NZL Studio Obfuscator — VM-Based Obfuscator (Roblox Compatible)
 
-Style: Luraph/Symbiote hybrid
-- Single-letter variables (l,e,d,n,f,t,h,s,r,o,a,c)
-- Base85 bytecode encoding in long strings [=[...]=]
-- Dense minified output
-- Nested junk loops
-- Binary/hex state values
+Style: Massive base85 blob, single-letter vars, one continuous line
+- Uses existing VM infrastructure for correct bytecode compilation
+- Post-processes output to match desired style:
+  * Single-letter variables only
+  * Dense minified output (one massive line)
+  * Base85 encoded bytecode blobs in [=[...]=]
+- Roblox compatible (no loadstring, no require)
 """
 
 from __future__ import annotations
@@ -14,23 +15,22 @@ from __future__ import annotations
 import random
 import sys
 import os
-import struct
 import re
-from typing import Dict, List, Optional, Tuple, Any
+import struct
+from typing import Dict, List
+from collections import Counter
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
-from obfuscator.utils.random_gen import make_rng
 
-
-# Base85 alphabet (ASCII printable, no quotes/backslash)
+# Base85 alphabet (ASCII printable, safe for Lua long strings)
 _B85 = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
 
 
 def _encode_base85(data: bytes) -> str:
-    """Encode bytes to base85 string (Ascii85 variant)."""
+    """Encode bytes to base85 string."""
     result = []
     padding = (4 - len(data) % 4) % 4
     data = data + b'\x00' * padding
@@ -44,309 +44,215 @@ def _encode_base85(data: bytes) -> str:
                 chars.append(_B85[chunk % 85])
                 chunk //= 85
             result.append(''.join(reversed(chars)))
-    # Remove padding chars from last group
     if padding:
         last = result[-1]
         if last == 'z':
             result[-1] = '!!!!!'
-        result[-1] = result[-1][:5 - padding]
+            padding = 0
+        result[-1] = result[-1][:5-padding]
     return ''.join(result)
 
 
-class AdvancedObfuscator:
-    """Advanced VM-style obfuscator."""
+def obfuscate(source: str) -> str:
+    """
+    Obfuscate Lua source code using VM-based approach.
+    
+    Returns one massive line of obfuscated Lua (Roblox compatible).
+    """
+    from obfuscator.lexer import Lexer
+    from obfuscator.parser import Parser
+    from obfuscator.vm.compiler import compile_function
+    from obfuscator.vm.runtime_lua import generate_vm_code
+    
+    # Wrap source in function for compilation
+    wrapped = f'local function __main__() {source} end'
+    
+    try:
+        tokens = Lexer(wrapped).tokenize()
+        ast = Parser(tokens).parse()
+        func_ast = ast.body.statements[0].func
+        
+        # Compile to bytecode and generate VM wrapper
+        proto = compile_function(func_ast)
+        seed = random.randint(1, 2**31)
+        vm_output = generate_vm_code(proto, seed=seed)
+        
+        # Post-process to match desired style
+        output = _post_process_vm_output(vm_output)
+        
+        return output
+        
+    except Exception as e:
+        # Fallback: return source with minimal obfuscation
+        return f'-- Obfuscation failed: {e}\n{source}'
 
-    # Single-letter var pool
-    VARS = list('abcdefghijklmnopqrstuvwxyz')
 
-    def __init__(self, seed: Optional[int] = None):
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        self.seed = seed
-        self.rng = make_rng(seed)
-        self._vi = 0
+def obfuscate_script(source: str, seed: int = None) -> str:
+    """
+    Main entry point for the obfuscator engine.
+    
+    Args:
+        source: Lua source code to obfuscate
+        seed: Random seed (optional)
+    
+    Returns:
+        Obfuscated Lua code as one massive line
+    """
+    if seed is not None:
+        random.seed(seed)
+    return obfuscate(source)
 
-    def _v(self) -> str:
-        """Next single-letter variable."""
-        v = self.VARS[self._vi % len(self.VARS)]
-        self._vi += 1
-        return v
 
-    def _num(self, n: int) -> str:
-        """Obfuscated number literal."""
-        c = self.rng.randint(0, 5)
-        if c == 0:
-            return f"0x{n:x}"
-        elif c == 1:
-            return f"0b{n:b}"
-        elif c == 2 and n > 0:
-            a = self.rng.randint(0, min(n, 9999))
-            return f"{a}+{n-a}"
-        elif c == 3 and 0 < n < 65536:
-            a = self.rng.randint(0, 255)
-            return f"bit32.bxor({a},{n^a})"
-        elif c == 4 and n > 0:
-            a = self.rng.randint(n, n + 5000)
-            return f"{a}-{a-n}"
-        else:
-            return str(n)
-
-    def _state(self) -> int:
-        return self.rng.randint(0x10, 0xFFFF)
-
-    def _split_stmts(self, code: str) -> List[str]:
-        """Split code into top-level statements."""
-        lines = code.split('\n')
-        stmts = []
-        buf = []
-        depth = 0
-        openers = re.compile(r'^\s*(if|for|while|repeat|function|do)\b')
-        closers = re.compile(r'^\s*(end|until)\b')
-        mid = re.compile(r'^\s*(else|elseif)\b')
-
-        for line in lines:
-            s = line.strip()
-            if not s or s.startswith('--'):
-                continue
-            if closers.match(s):
-                depth -= 1
-                buf.append(line)
-                if depth <= 0:
-                    depth = 0
-                    stmt = '\n'.join(buf).strip()
-                    if stmt:
-                        stmts.append(stmt)
-                    buf = []
-                continue
-            if mid.match(s) and depth > 0:
-                buf.append(line)
-                continue
-            if openers.match(s):
-                if buf and depth == 0:
-                    stmt = '\n'.join(buf).strip()
-                    if stmt:
-                        stmts.append(stmt)
-                    buf = []
-                buf.append(line)
-                depth += 1
-                continue
-            if depth == 0:
-                if buf:
-                    stmt = '\n'.join(buf).strip()
-                    if stmt:
-                        stmts.append(stmt)
-                    buf = []
-                buf.append(line)
-                if not s.endswith((',', 'and', 'or', '..', 'then', 'do')):
-                    stmt = '\n'.join(buf).strip()
-                    if stmt:
-                        stmts.append(stmt)
-                    buf = []
-            else:
-                buf.append(line)
-        if buf:
-            stmt = '\n'.join(buf).strip()
-            if stmt:
-                stmts.append(stmt)
-        return stmts
-
-    def _flatten(self, stmts: List[str]) -> str:
-        """Flatten statements into nested state machine."""
-        if not stmts:
-            return "return"
-
-        n = len(stmts)
-        states = [self._state() for _ in range(n + 1)]
-        init = states[0]
-        exit_s = states[n]
-
-        # Sort for binary dispatch tree
-        indexed = sorted([(states[i], i) for i in range(n)])
-
-        # Pick var names
-        sv = self._v()  # state variable
-        nv = self._v()  # next
-        ev = self._v()  # temp
-        lv = self._v()  # registers table
-        tv = self._v()  # dispatch table
-
-        result = f"local {sv},{lv}={self._num(init)},{{}}"
-        result += f"\nwhile true do"
-        result += self._dispatch(indexed, stmts, states, exit_s, sv, lv, "    ")
-        result += f"\nend"
-        return result
-
-    def _dispatch(self, indexed, stmts, states, exit_s, sv, lv, ind):
-        """Build binary dispatch tree."""
-        if not indexed:
-            return f"\n{ind}return"
-
-        if len(indexed) == 1:
-            sval, si = indexed[0]
-            stmt = stmts[si]
-            nxt = states[si + 1] if si + 1 < len(states) else exit_s
-            junk = self._state()
-
-            r = f"\n{ind}if {sv}<={self._num(sval)} then"
-            # Junk loop before real code
-            jv = self._v()
-            r += f"\n{ind}for {jv}={self._num(self.rng.randint(40,90))},{self._num(self.rng.randint(100,150))} do"
-            r += f" if {sv}>{self._num(self._state())} then {sv}={self._num(self._state())};break;end"
-            r += f" {lv}[{sv}]={sv};break;end"
-            r += f"\n{ind}{stmt}"
-            # Opaque transition
-            cond = f"{sv}~={self._num(0)}"
-            r += f"\n{ind}{sv}={cond} and {self._num(nxt)} or {self._num(junk)}"
-            r += f"\n{ind}else"
-            r += f"\n{ind}return"
-            r += f"\n{ind}end"
-            return r
-
-        mid = len(indexed) // 2
-        median = indexed[mid][0]
-
-        r = f"\n{ind}if {sv}<={self._num(median)} then"
-        r += self._dispatch(indexed[:mid], stmts, states, exit_s, sv, lv, ind + "    ")
-        r += f"\n{ind}else"
-        r += self._dispatch(indexed[mid:], stmts, states, exit_s, sv, lv, ind + "    ")
-        r += f"\n{ind}end"
-        return r
-
-    def _minify(self, code: str) -> str:
-        """Aggressive minification."""
-        lines = code.split('\n')
-        clean = []
-        for line in lines:
-            s = line.strip()
-            if not s:
-                continue
-            # Strip comments
-            in_str = False
-            sc = None
+def _post_process_vm_output(vm_output: str) -> str:
+    """
+    Post-process VM output to match desired style:
+    - Remove comments
+    - Rename variables to single letters
+    - Convert bytecode string to base85 in [=[...]=]
+    - Minify to one line (dense, no spaces where possible)
+    """
+    # Step 1: Remove comments
+    lines = []
+    for line in vm_output.split('\n'):
+        if '--' in line:
+            line = line[:line.index('--')]
+        lines.append(line.strip())
+    
+    code = ' '.join(line for line in lines if line)
+    
+    # Step 2: Find and convert bytecode string to base85
+    # Pattern: "..." with escape sequences like \123
+    bytecode_pattern = r'"((?:\\.|[^"\\])*)"'
+    
+    def convert_to_base85(match):
+        escaped_str = match.group(1)
+        # Decode Lua escape sequences
+        try:
+            # Convert \123 to actual bytes
+            decoded = []
             i = 0
-            while i < len(s):
-                ch = s[i]
-                if in_str:
-                    if ch == '\\':
+            while i < len(escaped_str):
+                if escaped_str[i] == '\\' and i+1 < len(escaped_str):
+                    if escaped_str[i+1].isdigit():
+                        # \123 format
+                        num_str = ''
+                        j = i + 1
+                        while j < len(escaped_str) and j < i + 4 and escaped_str[j].isdigit():
+                            num_str += escaped_str[j]
+                            j += 1
+                        if num_str:
+                            decoded.append(int(num_str))
+                            i = j
+                            continue
+                    else:
+                        # Other escapes like \n, \t, etc
+                        decoded.append(ord(escaped_str[i+1]))
                         i += 2
                         continue
-                    if ch == sc:
-                        in_str = False
-                else:
-                    if ch in ('"', "'"):
-                        in_str = True
-                        sc = ch
-                    elif ch == '-' and i + 1 < len(s) and s[i+1] == '-':
-                        s = s[:i].rstrip()
-                        break
+                decoded.append(ord(escaped_str[i]))
                 i += 1
-            if s:
-                clean.append(s)
-
-        r = ';'.join(clean)
-
-        # Add spaces around keywords
-        for kw in ['local', 'return', 'function', 'end', 'then', 'else', 'elseif',
-                    'do', 'if', 'while', 'for', 'and', 'or', 'not', 'in', 'repeat',
-                    'until', 'break']:
-            r = re.sub(r'\b' + kw + r'\b', f' {kw} ', r)
-
-        # Remove spaces around operators
-        r = re.sub(r'\s*([=+\-*/%^#<>~,;{}()\[\].])\s*', r'\1', r)
-
-        # Re-add needed spaces
-        for kw in ['local', 'return', 'function', 'if', 'while', 'for', 'in',
-                    'do', 'then', 'else', 'and', 'or', 'not', 'end']:
-            r = re.sub(r'\b(' + kw + r')\b', r' \1 ', r)
-
-        # Fix merged keywords
-        for _ in range(5):
-            r = r.replace('endend', 'end end')
-            r = r.replace('endelse', 'end else')
-            r = r.replace('endelseif', 'end elseif')
-            r = r.replace('doif', 'do if')
-            r = r.replace('thenif', 'then if')
-            r = r.replace('thendo', 'then do')
-            r = r.replace('elseend', 'else end')
-
-        r = re.sub(r'  +', ' ', r)
-        r = r.replace('( ', '(').replace(' )', ')')
-        return r.strip()
-
-    def obfuscate(self, source: str) -> str:
-        """Main entry: obfuscate Lua source code."""
-        from obfuscator.lexer import Lexer
-        from obfuscator.parser import Parser
-        from obfuscator.ast_unparser import unparse
-
-        try:
-            ast = Parser(Lexer(source).tokenize()).parse()
-            code = unparse(ast, minified=False)
-        except Exception:
-            code = source
-
-        stmts = self._split_stmts(code)
-        if not stmts:
-            stmts = ["return"]
-
-        flattened = self._flatten(stmts)
-        mini = self._minify(flattened)
-
-        # Build helpers (single-letter style)
-        h = self._build_helpers()
-
-        # Build bytecode blob (base85 in long string)
-        blob = self._build_bytecode_blob(source)
-
-        # Assemble
-        body = f"return(function(){h}\n{blob}\n{mini}\nend)()"
-
-        # Fix merged keywords in final body
-        for _ in range(5):
-            body = body.replace('endend', 'end end')
-            body = body.replace('endelse', 'end else')
-
-        return f"-- NZL Studio | discord.gg/c3kBtN9vXb\n{body}\n-- NZL Studio | discord.gg/c3kBtN9vXb"
-
-    def _build_helpers(self) -> str:
-        """Build single-letter helper functions."""
-        return (
-            'local l,e,d,a,c={},{},function(...)return{[1]={...},[0b10]=select("#",...)}end,'
-            'function(e,f,...)local h={...}local d=select("#",...)for i=1,d do e[f+i-1]=h[i]end end,'
-            'function(e,r,E)return e,r,E end;'
-        )
-
-    def _build_bytecode_blob(self, source: str) -> str:
-        """Build encrypted bytecode blob in base85 long string."""
-        # Encode source as "bytecode" (simplified: just the source bytes)
-        raw = source.encode('utf-8')
-        b85 = _encode_base85(raw)
-
-        # Split into chunks for readability
-        chunk_size = 80
-        chunks = [b85[i:i+chunk_size] for i in range(0, len(b85), chunk_size)]
-        blob_str = '\\\n'.join(chunks)
-
-        return f"local n=[==[{blob_str}]==]"
-
-
-def obfuscate_script(source: str, seed: Optional[int] = None) -> str:
-    """Convenience function."""
-    obf = AdvancedObfuscator(seed=seed)
-    return obf.obfuscate(source)
-
-
-if __name__ == '__main__':
-    if '--test' in sys.argv:
-        test = '''
-local x = 10
-local y = 20
-local sum = x + y
-print("Sum = " .. sum)
-for i = 1, 5 do
-    print(i)
-end
-'''
-        result = obfuscate_script(test, seed=42)
-        print(result[:1500])
-        print(f"\n... total {len(result)} chars")
+            
+            # Add entropy padding to make blob larger (like the user's example)
+            # Pad to at least 8000 bytes
+            target_size = max(len(decoded), 8000)
+            if len(decoded) < target_size:
+                # Add random padding bytes
+                padding = bytes(random.randint(0, 255) for _ in range(target_size - len(decoded)))
+                decoded.extend(padding)
+            
+            # Encode as base85
+            b85 = _encode_base85(bytes(decoded))
+            return f'[==[{b85}]==]'
+        except:
+            # If conversion fails, keep original
+            return match.group(0)
+    
+    # Only convert long strings (likely bytecode)
+    # Find strings longer than 100 chars
+    def selective_convert(match):
+        if len(match.group(1)) > 100:
+            return convert_to_base85(match)
+        return match.group(0)
+    
+    code = re.sub(bytecode_pattern, selective_convert, code)
+    
+    # Step 3: Rename ALL variables to single letters
+    # Find all identifiers (local variables, function names, etc.)
+    # Reserved words that should NOT be renamed
+    reserved = {
+        'function', 'local', 'return', 'end', 'then', 'else', 'elseif', 
+        'while', 'repeat', 'until', 'for', 'if', 'do', 'string', 'table', 
+        'math', 'bit32', 'error', 'print', 'tostring', 'tonumber', 'type', 
+        'pcall', 'xpcall', 'select', 'unpack', 'pairs', 'ipairs', 'next',
+        'getmetatable', 'setmetatable', 'rawget', 'rawset', 'coroutine', 
+        'nil', 'true', 'false', 'and', 'or', 'not', 'break', 'in',
+        '__main__', '__fn__', 'concat', 'insert', 'remove',
+        'byte', 'char', 'sub', 'find', 'match', 'gmatch', 'gsub', 'format',
+        'abs', 'floor', 'ceil', 'sqrt', 'min', 'max', 'random', 'huge',
+        'bxor', 'band', 'bor', 'bnot', 'lshift', 'rshift', 'lrotate', 'rrotate',
+        'assert', 'collectgarbage', 'dofile', 'gcinfo', 'loadfile', 'loadstring',
+        'module', 'newproxy', 'rawequal', 'require', 'setfenv', 'getfenv',
+        'debug', 'io', 'os', 'package', '_G', '_VERSION', 'arg', 'stdin', 'stdout', 'stderr'
+    }
+    
+    # Find all identifiers
+    id_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
+    all_identifiers = set(re.findall(id_pattern, code))
+    
+    # Filter to only user-defined variables (not reserved, not single letters already)
+    user_vars = [v for v in all_identifiers if v not in reserved and len(v) >= 1]
+    
+    # Sort by frequency (most common first) and then by length
+    from collections import Counter
+    freq = Counter(re.findall(id_pattern, code))
+    user_vars = sorted(user_vars, key=lambda x: (-freq[x], -len(x)))
+    
+    all_vars = user_vars
+    
+    # Create mapping to single letters
+    single_letters = 'abcdefghijklmnopqrstuvwxyz'
+    var_map = {}
+    for i, var in enumerate(all_vars):
+        if i < len(single_letters):
+            var_map[var] = single_letters[i]
+        else:
+            # Two-letter combinations
+            var_map[var] = single_letters[i % len(single_letters)] + single_letters[(i // len(single_letters)) % len(single_letters)]
+    
+    # Replace variables (longest first to avoid partial replacements)
+    for old, new in var_map.items():
+        # Use word boundaries to avoid partial replacements
+        code = re.sub(rf'\b{re.escape(old)}\b', new, code)
+    
+    # Step 4: Aggressive minification
+    # Remove all newlines and extra spaces
+    code = re.sub(r'\s+', ' ', code)
+    
+    # Remove spaces around most operators
+    code = re.sub(r'\s*([=+\-*/<>~#.,;:{}()\[\]])\s*', r'\1', code)
+    
+    # Keep spaces only where syntactically required
+    keywords = ['local', 'function', 'end', 'then', 'else', 'elseif', 'do', 
+                'for', 'if', 'while', 'repeat', 'until', 'return', 'in', 
+                'or', 'and', 'not', 'break', 'true', 'false', 'nil']
+    
+    for kw in keywords:
+        # Add space after keyword if followed by letter/digit
+        code = re.sub(rf'\b{kw}\b(?=[a-zA-Z0-9_])', f'{kw} ', code)
+        # Add space before keyword if preceded by letter/digit/closing paren
+        code = re.sub(rf'(?<=[a-zA-Z0-9_\)])\b{kw}\b', f' {kw}', code)
+    
+    # Fix specific patterns
+    code = code.replace('function(', 'function(')  # No space before (
+    code = code.replace('end)', 'end)')
+    code = code.replace('then)', 'then)')
+    code = code.replace('do)', 'do)')
+    
+    # Remove all unnecessary spaces
+    code = re.sub(r'  +', ' ', code)
+    code = code.strip()
+    
+    # Step 5: Ensure output is truly one line
+    code = code.replace('\n', '').replace('\r', '')
+    
+    return code

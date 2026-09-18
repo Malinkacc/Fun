@@ -538,7 +538,14 @@ class Compiler:
     # ──────────────────────────────────────────────────────────────────────
 
     def _compile_call_stat(self, stat: CallStat) -> None:
-        self._compile_call(stat.call, want_results=0)
+        # Check if it's a method call and route accordingly
+        if isinstance(stat.call, MethodCallExpr):
+            # For method calls as statements, compile and discard result
+            reg = self._regs.allocate_range(1)
+            self._compile_method_call_to_reg(stat.call, reg)
+            self._regs.free_to(reg)
+        else:
+            self._compile_call(stat.call, want_results=0)
 
     # ──────────────────────────────────────────────────────────────────────
     # if
@@ -1081,6 +1088,9 @@ class Compiler:
     }
 
     def _lib_call_key(self, expr: CallExpr):
+        # MethodCallExpr doesn't have a func attribute
+        if isinstance(expr, MethodCallExpr):
+            return None
         func = expr.func
         if isinstance(func, IndexExpr) and func.is_dot and isinstance(func.obj, NameExpr):
             if isinstance(func.index, StringLit):
