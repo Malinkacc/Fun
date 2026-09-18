@@ -1,12 +1,12 @@
 """
-NZL Studio Obfuscator — Symbiote-style Control Flow Flattening
+NZL Studio Obfuscator — Advanced VM Obfuscator
 
-Style:
-- return({key=function(_,c)return function()local a=STATE while true do if a<=X then if a<=Y then ...
-- Opaque predicates: a = cond and STATE_A or STATE_B  
-- Binary/hex literals: 0b10, 0x9a
-- Helpers: _.c() pack, _.d() unpack
-- Deeply nested if-else state dispatch tree
+Style: Luraph/Symbiote hybrid
+- Single-letter variables (l,e,d,n,f,t,h,s,r,o,a,c)
+- Base85 bytecode encoding in long strings [=[...]=]
+- Dense minified output
+- Nested junk loops
+- Binary/hex state values
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from __future__ import annotations
 import random
 import sys
 import os
+import struct
 import re
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -24,255 +25,204 @@ if _root not in sys.path:
 from obfuscator.utils.random_gen import make_rng
 
 
-class SymbioteObfuscator:
-    """Symbiote-style control flow flattening obfuscator."""
-    
+# Base85 alphabet (ASCII printable, no quotes/backslash)
+_B85 = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+
+
+def _encode_base85(data: bytes) -> str:
+    """Encode bytes to base85 string (Ascii85 variant)."""
+    result = []
+    padding = (4 - len(data) % 4) % 4
+    data = data + b'\x00' * padding
+    for i in range(0, len(data), 4):
+        chunk = struct.unpack('>I', data[i:i+4])[0]
+        if chunk == 0:
+            result.append('z')
+        else:
+            chars = []
+            for _ in range(5):
+                chars.append(_B85[chunk % 85])
+                chunk //= 85
+            result.append(''.join(reversed(chars)))
+    # Remove padding chars from last group
+    if padding:
+        last = result[-1]
+        if last == 'z':
+            result[-1] = '!!!!!'
+        result[-1] = result[-1][:5 - padding]
+    return ''.join(result)
+
+
+class AdvancedObfuscator:
+    """Advanced VM-style obfuscator."""
+
+    # Single-letter var pool
+    VARS = list('abcdefghijklmnopqrstuvwxyz')
+
     def __init__(self, seed: Optional[int] = None):
         if seed is None:
             seed = random.randint(0, 2**32 - 1)
         self.seed = seed
         self.rng = make_rng(seed)
-    
-    def _gen_num(self, value: int) -> str:
-        """Generate obfuscated number literal"""
-        choice = self.rng.randint(0, 4)
-        if choice == 0:
-            return f"0x{value:x}"
-        elif choice == 1:
-            return f"0b{value:b}"
-        elif choice == 2:
-            return str(value)
-        elif choice == 3:
-            if value > 0:
-                a = self.rng.randint(0, min(value, 999))
-                b = value - a
-                if b < 0:
-                    return f"0x{value:x}"
-                return f"{a}+{b}"
-            return str(value)
+        self._vi = 0
+
+    def _v(self) -> str:
+        """Next single-letter variable."""
+        v = self.VARS[self._vi % len(self.VARS)]
+        self._vi += 1
+        return v
+
+    def _num(self, n: int) -> str:
+        """Obfuscated number literal."""
+        c = self.rng.randint(0, 5)
+        if c == 0:
+            return f"0x{n:x}"
+        elif c == 1:
+            return f"0b{n:b}"
+        elif c == 2 and n > 0:
+            a = self.rng.randint(0, min(n, 9999))
+            return f"{a}+{n-a}"
+        elif c == 3 and 0 < n < 65536:
+            a = self.rng.randint(0, 255)
+            return f"bit32.bxor({a},{n^a})"
+        elif c == 4 and n > 0:
+            a = self.rng.randint(n, n + 5000)
+            return f"{a}-{a-n}"
         else:
-            if 0 < value < 65536:
-                a = self.rng.randint(0, 255)
-                b = value ^ a
-                return f"bit32.bxor({a},{b})"
-            return f"0x{value:x}"
-    
-    def _alloc_state(self) -> int:
+            return str(n)
+
+    def _state(self) -> int:
         return self.rng.randint(0x10, 0xFFFF)
-    
-    def _split_statements(self, code: str) -> List[str]:
-        """
-        Split Lua code into top-level statements,
-        keeping block structures (if/for/while/function/do) intact.
-        """
+
+    def _split_stmts(self, code: str) -> List[str]:
+        """Split code into top-level statements."""
         lines = code.split('\n')
-        statements = []
-        current_lines = []
+        stmts = []
+        buf = []
         depth = 0
-        
-        # Keywords that increase depth
         openers = re.compile(r'^\s*(if|for|while|repeat|function|do)\b')
-        # Keywords that decrease depth
         closers = re.compile(r'^\s*(end|until)\b')
-        # Keywords that are neutral but start new blocks
         mid = re.compile(r'^\s*(else|elseif)\b')
-        
+
         for line in lines:
-            stripped = line.strip()
-            if not stripped or stripped.startswith('--'):
+            s = line.strip()
+            if not s or s.startswith('--'):
                 continue
-            
-            # Check if this line closes a block
-            if closers.match(stripped):
+            if closers.match(s):
                 depth -= 1
-                current_lines.append(line)
+                buf.append(line)
                 if depth <= 0:
                     depth = 0
-                    stmt = '\n'.join(current_lines).strip()
+                    stmt = '\n'.join(buf).strip()
                     if stmt:
-                        statements.append(stmt)
-                    current_lines = []
+                        stmts.append(stmt)
+                    buf = []
                 continue
-            
-            # Check if this line is mid-block (else/elseif)
-            if mid.match(stripped) and depth > 0:
-                current_lines.append(line)
+            if mid.match(s) and depth > 0:
+                buf.append(line)
                 continue
-            
-            # Check if this line opens a block
-            if openers.match(stripped):
-                if current_lines and depth == 0:
-                    stmt = '\n'.join(current_lines).strip()
+            if openers.match(s):
+                if buf and depth == 0:
+                    stmt = '\n'.join(buf).strip()
                     if stmt:
-                        statements.append(stmt)
-                    current_lines = []
-                current_lines.append(line)
+                        stmts.append(stmt)
+                    buf = []
+                buf.append(line)
                 depth += 1
                 continue
-            
-            # Regular statement
             if depth == 0:
-                if current_lines:
-                    stmt = '\n'.join(current_lines).strip()
+                if buf:
+                    stmt = '\n'.join(buf).strip()
                     if stmt:
-                        statements.append(stmt)
-                    current_lines = []
-                current_lines.append(line)
-                # Check if complete (doesn't end with continuation)
-                if not stripped.endswith((',', 'and', 'or', '..', 'then', 'do')):
-                    stmt = '\n'.join(current_lines).strip()
+                        stmts.append(stmt)
+                    buf = []
+                buf.append(line)
+                if not s.endswith((',', 'and', 'or', '..', 'then', 'do')):
+                    stmt = '\n'.join(buf).strip()
                     if stmt:
-                        statements.append(stmt)
-                    current_lines = []
+                        stmts.append(stmt)
+                    buf = []
             else:
-                current_lines.append(line)
-        
-        if current_lines:
-            stmt = '\n'.join(current_lines).strip()
+                buf.append(line)
+        if buf:
+            stmt = '\n'.join(buf).strip()
             if stmt:
-                statements.append(stmt)
-        
-        return statements
-    
-    def _flatten_block(self, statements: List[str], indent: str = "        ") -> str:
-        """Flatten statements into a state machine."""
-        
-        if not statements:
-            return f"{indent}return"
-        
-        n = len(statements)
-        states = [self._alloc_state() for _ in range(n + 1)]
-        initial = states[0]
-        exit_state = states[n]
-        
-        # Create (state, index) pairs sorted by state value
+                stmts.append(stmt)
+        return stmts
+
+    def _flatten(self, stmts: List[str]) -> str:
+        """Flatten statements into nested state machine."""
+        if not stmts:
+            return "return"
+
+        n = len(stmts)
+        states = [self._state() for _ in range(n + 1)]
+        init = states[0]
+        exit_s = states[n]
+
+        # Sort for binary dispatch tree
         indexed = sorted([(states[i], i) for i in range(n)])
-        
-        # Build the result
-        result = f"{indent}local a={self._gen_num(initial)}\n"
-        result += f"{indent}while true do\n"
-        result += self._build_dispatch_tree(indexed, statements, states, exit_state, indent + "    ")
-        result += f"{indent}end"
-        
+
+        # Pick var names
+        sv = self._v()  # state variable
+        nv = self._v()  # next
+        ev = self._v()  # temp
+        lv = self._v()  # registers table
+        tv = self._v()  # dispatch table
+
+        result = f"local {sv},{lv}={self._num(init)},{{}}"
+        result += f"\nwhile true do"
+        result += self._dispatch(indexed, stmts, states, exit_s, sv, lv, "    ")
+        result += f"\nend"
         return result
-    
-    def _build_dispatch_tree(self, indexed: List[Tuple[int, int]], 
-                             statements: List[str], all_states: List[int],
-                             exit_state: int, indent: str) -> str:
-        """Build binary search tree for state dispatch."""
-        
+
+    def _dispatch(self, indexed, stmts, states, exit_s, sv, lv, ind):
+        """Build binary dispatch tree."""
         if not indexed:
-            return f"{indent}return\n"
-        
+            return f"\n{ind}return"
+
         if len(indexed) == 1:
-            state_val, stmt_idx = indexed[0]
-            stmt = statements[stmt_idx].replace('\n', '\n' + indent + "    ")
-            next_state = all_states[stmt_idx + 1] if stmt_idx + 1 < len(all_states) else exit_state
-            
-            result = f"{indent}if a<={self._gen_num(state_val)} then\n"
-            result += f"{indent}    {stmt}\n"
-            
+            sval, si = indexed[0]
+            stmt = stmts[si]
+            nxt = states[si + 1] if si + 1 < len(states) else exit_s
+            junk = self._state()
+
+            r = f"\n{ind}if {sv}<={self._num(sval)} then"
+            # Junk loop before real code
+            jv = self._v()
+            r += f"\n{ind}for {jv}={self._num(self.rng.randint(40,90))},{self._num(self.rng.randint(100,150))} do"
+            r += f" if {sv}>{self._num(self._state())} then {sv}={self._num(self._state())};break;end"
+            r += f" {lv}[{sv}]={sv};break;end"
+            r += f"\n{ind}{stmt}"
             # Opaque transition
-            cond_var = f"a"
-            junk_state = self._alloc_state()
-            result += f"{indent}    a=({cond_var}=={cond_var}) and {self._gen_num(next_state)} or {self._gen_num(junk_state)}\n"
-            result += f"{indent}else\n"
-            result += f"{indent}    return\n"
-            result += f"{indent}end\n"
-            return result
-        
+            cond = f"{sv}~={self._num(0)}"
+            r += f"\n{ind}{sv}={cond} and {self._num(nxt)} or {self._num(junk)}"
+            r += f"\n{ind}else"
+            r += f"\n{ind}return"
+            r += f"\n{ind}end"
+            return r
+
         mid = len(indexed) // 2
-        median_val = indexed[mid][0]
-        
-        left = indexed[:mid]
-        right = indexed[mid:]
-        
-        result = f"{indent}if a<={self._gen_num(median_val)} then\n"
-        result += self._build_dispatch_tree(left, statements, all_states, exit_state, indent + "    ")
-        result += f"{indent}else\n"
-        result += self._build_dispatch_tree(right, statements, all_states, exit_state, indent + "    ")
-        result += f"{indent}end\n"
-        
-        return result
-    
-    def _gen_const_table(self) -> str:
-        """Generate a decorative constant table like Symbiote uses"""
-        entries = []
-        for i in range(self.rng.randint(3, 8)):
-            dim = self.rng.choice([1, 0b10, 0b11, 0b100, 0b101])
-            d1 = self._gen_num(dim)
-            d2 = self._gen_num(0b11)
-            d3 = self._gen_num(0b10)
-            val = self._gen_num(self.rng.randint(1, 100))
-            entries.append(f"[{d1}]={{[{d2}]={{[{d3}]={val}}}}}")
-        return "local c={" + ",".join(entries) + "}"
-    
-    def obfuscate_script(self, source: str) -> str:
-        """Obfuscate a complete Lua script in Symbiote style."""
-        
-        # Normalize source
-        from obfuscator.lexer import Lexer
-        from obfuscator.parser import Parser
-        from obfuscator.ast_unparser import unparse
-        
-        try:
-            ast = Parser(Lexer(source).tokenize()).parse()
-            clean_code = unparse(ast, minified=False)
-        except Exception:
-            clean_code = source
-        
-        # Split into statements
-        statements = self._split_statements(clean_code)
-        if not statements:
-            statements = ["return"]
-        
-        # Flatten
-        flattened = self._flatten_block(statements, "        ")
-        
-        # Minify the flattened code
-        flat_mini = self._minify(flattened)
-        
-        # Build result (all on minimal lines like Symbiote)
-        helpers = self._build_helpers().replace('\n', '')
-        const_table = self._gen_const_table()
-        
-        func_key = ''.join(self.rng.choices('abcdefghijklmnopqrstuvwxyz', k=self.rng.randint(1, 3)))
-        
-        # Assemble everything compactly
-        body = f"return({{{func_key}=function(_,c)return function(){flat_mini}end end,}})"
-        
-        # Fix merged keywords in body
-        for _ in range(5):
-            body = body.replace('endend', 'end end')
-            body = body.replace('endelse', 'end else')
-            body = body.replace('endelseif', 'end elseif')
-        
-        result = f"-- NZL Studio Obfuscator | discord.gg/c3kBtN9vXb\n"
-        result += f"{helpers}\n"
-        result += f"{const_table}\n"
-        result += f"{body}\n"
-        result += f"-- NZL Studio Obfuscator | discord.gg/c3kBtN9vXb"
-        
-        return result
-    
-    def _build_helpers(self) -> str:
-        return 'local _={};' + \
-               '_.c=function(...)return{[1]={...},[0b10]=select("#",...)}end;' + \
-               '_.d=function(e,f,...)local h={...}local d=select("#",...)for i=1,d do e[f+i-1]=h[i]end end;' + \
-               '_.b=function(e,r,E)return e,r,E end;' + \
-               '_.e=function(e,f,...)local h={...}local d=select("#",...)for i=1,d do e[f+i-1]=h[i]end end'
-    
+        median = indexed[mid][0]
+
+        r = f"\n{ind}if {sv}<={self._num(median)} then"
+        r += self._dispatch(indexed[:mid], stmts, states, exit_s, sv, lv, ind + "    ")
+        r += f"\n{ind}else"
+        r += self._dispatch(indexed[mid:], stmts, states, exit_s, sv, lv, ind + "    ")
+        r += f"\n{ind}end"
+        return r
+
     def _minify(self, code: str) -> str:
-        """Minify Lua code: remove comments, extra spaces, collapse to compact form"""
+        """Aggressive minification."""
         lines = code.split('\n')
         clean = []
         for line in lines:
             s = line.strip()
             if not s:
                 continue
-            # Remove trailing comments
+            # Strip comments
             in_str = False
-            str_char = None
+            sc = None
             i = 0
             while i < len(s):
                 ch = s[i]
@@ -280,74 +230,115 @@ class SymbioteObfuscator:
                     if ch == '\\':
                         i += 2
                         continue
-                    if ch == str_char:
+                    if ch == sc:
                         in_str = False
                 else:
                     if ch in ('"', "'"):
                         in_str = True
-                        str_char = ch
-                    elif ch == '-' and i + 1 < len(s) and s[i + 1] == '-':
+                        sc = ch
+                    elif ch == '-' and i + 1 < len(s) and s[i+1] == '-':
                         s = s[:i].rstrip()
                         break
                 i += 1
             if s:
                 clean.append(s)
-        
-        # Join with ; separator
-        result = ';'.join(clean)
-        
-        # Normalize spaces around keywords
+
+        r = ';'.join(clean)
+
+        # Add spaces around keywords
         for kw in ['local', 'return', 'function', 'end', 'then', 'else', 'elseif',
-                    'do', 'if', 'while', 'for', 'and', 'or', 'not', 'in', 'repeat', 'until', 'break']:
-            result = re.sub(r'\b' + kw + r'\b', f' {kw} ', result)
-        
+                    'do', 'if', 'while', 'for', 'and', 'or', 'not', 'in', 'repeat',
+                    'until', 'break']:
+            r = re.sub(r'\b' + kw + r'\b', f' {kw} ', r)
+
         # Remove spaces around operators
-        result = re.sub(r'\s*([=+\-*/%^#<>~,;{}()\[\]])\s*', r'\1', result)
-        
-        # Re-add necessary spaces
-        # After keywords before expressions
-        result = re.sub(r'\b(local)\b', r'\1 ', result)
-        result = re.sub(r'\b(return)\b', r'\1 ', result)
-        result = re.sub(r'\b(function)\b', r'\1 ', result)
-        result = re.sub(r'\b(if)\b', r'\1 ', result)
-        result = re.sub(r'\b(while)\b', r'\1 ', result)
-        result = re.sub(r'\b(for)\b', r'\1 ', result)
-        result = re.sub(r'\b(in)\b', r' \1 ', result)
-        result = re.sub(r'\b(do)\b', r' \1 ', result)
-        result = re.sub(r'\b(then)\b', r' \1 ', result)
-        result = re.sub(r'\b(else)\b', r' \1 ', result)
-        result = re.sub(r'\b(and)\b', r' \1 ', result)
-        result = re.sub(r'\b(or)\b', r' \1 ', result)
-        result = re.sub(r'\b(not)\b', r'\1 ', result)
-        result = re.sub(r'\b(end)\b', r' \1 ', result)
-        
-        # Fix double spaces
-        result = re.sub(r'  +', ' ', result)
-        # Remove space after ( and before )
-        result = result.replace('( ', '(').replace(' )', ')')
-        
-        # FINAL PASS: fix merged keywords
-        for _ in range(3):
-            result = result.replace('endend', 'end end')
-            result = result.replace('endelse', 'end else')
-            result = result.replace('endelseif', 'end elseif')
-            result = result.replace('doif', 'do if')
-            result = result.replace('thenif', 'then if')
-            result = result.replace('thendo', 'then do')
-            result = result.replace('elseend', 'else end')
-        
-        return result.strip()
+        r = re.sub(r'\s*([=+\-*/%^#<>~,;{}()\[\].])\s*', r'\1', r)
+
+        # Re-add needed spaces
+        for kw in ['local', 'return', 'function', 'if', 'while', 'for', 'in',
+                    'do', 'then', 'else', 'and', 'or', 'not', 'end']:
+            r = re.sub(r'\b(' + kw + r')\b', r' \1 ', r)
+
+        # Fix merged keywords
+        for _ in range(5):
+            r = r.replace('endend', 'end end')
+            r = r.replace('endelse', 'end else')
+            r = r.replace('endelseif', 'end elseif')
+            r = r.replace('doif', 'do if')
+            r = r.replace('thenif', 'then if')
+            r = r.replace('thendo', 'then do')
+            r = r.replace('elseend', 'else end')
+
+        r = re.sub(r'  +', ' ', r)
+        r = r.replace('( ', '(').replace(' )', ')')
+        return r.strip()
+
+    def obfuscate(self, source: str) -> str:
+        """Main entry: obfuscate Lua source code."""
+        from obfuscator.lexer import Lexer
+        from obfuscator.parser import Parser
+        from obfuscator.ast_unparser import unparse
+
+        try:
+            ast = Parser(Lexer(source).tokenize()).parse()
+            code = unparse(ast, minified=False)
+        except Exception:
+            code = source
+
+        stmts = self._split_stmts(code)
+        if not stmts:
+            stmts = ["return"]
+
+        flattened = self._flatten(stmts)
+        mini = self._minify(flattened)
+
+        # Build helpers (single-letter style)
+        h = self._build_helpers()
+
+        # Build bytecode blob (base85 in long string)
+        blob = self._build_bytecode_blob(source)
+
+        # Assemble
+        body = f"return(function(){h}\n{blob}\n{mini}\nend)()"
+
+        # Fix merged keywords in final body
+        for _ in range(5):
+            body = body.replace('endend', 'end end')
+            body = body.replace('endelse', 'end else')
+
+        return f"-- NZL Studio | discord.gg/c3kBtN9vXb\n{body}\n-- NZL Studio | discord.gg/c3kBtN9vXb"
+
+    def _build_helpers(self) -> str:
+        """Build single-letter helper functions."""
+        return (
+            'local l,e,d,a,c={},{},function(...)return{[1]={...},[0b10]=select("#",...)}end,'
+            'function(e,f,...)local h={...}local d=select("#",...)for i=1,d do e[f+i-1]=h[i]end end,'
+            'function(e,r,E)return e,r,E end;'
+        )
+
+    def _build_bytecode_blob(self, source: str) -> str:
+        """Build encrypted bytecode blob in base85 long string."""
+        # Encode source as "bytecode" (simplified: just the source bytes)
+        raw = source.encode('utf-8')
+        b85 = _encode_base85(raw)
+
+        # Split into chunks for readability
+        chunk_size = 80
+        chunks = [b85[i:i+chunk_size] for i in range(0, len(b85), chunk_size)]
+        blob_str = '\\\n'.join(chunks)
+
+        return f"local n=[==[{blob_str}]==]"
 
 
 def obfuscate_script(source: str, seed: Optional[int] = None) -> str:
-    """Convenience function"""
-    obf = SymbioteObfuscator(seed=seed)
-    return obf.obfuscate_script(source)
+    """Convenience function."""
+    obf = AdvancedObfuscator(seed=seed)
+    return obf.obfuscate(source)
 
 
 if __name__ == '__main__':
     if '--test' in sys.argv:
-        test_source = '''
+        test = '''
 local x = 10
 local y = 20
 local sum = x + y
@@ -356,5 +347,6 @@ for i = 1, 5 do
     print(i)
 end
 '''
-        result = obfuscate_script(test_source, seed=42)
-        print(result)
+        result = obfuscate_script(test, seed=42)
+        print(result[:1500])
+        print(f"\n... total {len(result)} chars")
