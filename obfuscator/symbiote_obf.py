@@ -240,9 +240,19 @@ def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
     # Decrypt
     parts.append(f'local dd=t(bb:sub(1,{orig_len}),cc)')
     
-    # Debug: show first 200 chars of decrypted code
+    # Debug: show detailed info
     parts.append(
-        'error("Decrypted code (first 200 chars): " .. tostring(dd):sub(1,200) .. " ... (total length: " .. #dd .. ")")'
+        'local dbg="Base85 first 20: " .. bb:sub(1,20) .. "\\n" '
+        'dbg=dbg.."Base85 length: " .. #bb .. "\\n" '
+        'dbg=dbg.."Key length: " .. #cc .. "\\n" '
+        'dbg=dbg.."Key bytes: " '
+        'for i=1,math.min(10,#cc) do dbg=dbg..string.byte(cc,i).." " end '
+        'dbg=dbg.."\\n" '
+        'dbg=dbg.."Decrypted length: " .. #dd .. "\\n" '
+        'dbg=dbg.."Decrypted first 100: " .. dd:sub(1,100) .. "\\n" '
+        'dbg=dbg.."Decrypted bytes 1-10: " '
+        'for i=1,10 do dbg=dbg..string.byte(dd,i).." " end '
+        'error(dbg)'
     )
     
     # Execute via loadstring with error handling (DISABLED FOR DEBUG)
