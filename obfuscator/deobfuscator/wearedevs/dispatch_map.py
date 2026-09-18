@@ -37,7 +37,7 @@ if _REPO_ROOT not in sys.path:
 _KEYWORDS = {'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
              'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
              'return', 'then', 'true', 'until', 'while'}
-_MULTI_OPS = ('==', '~=', '<=', '>=', '..')
+_MULTI_OPS = ('...', '==', '~=', '<=', '>=', '..')
 _SINGLE_OPS = set('+-*/%^#<>=(){}[];:,.')
 _NUM_RE = re.compile(r'\d+\.\d+(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?|\d+')
 _NAME_RE = re.compile(r'[A-Za-z_][A-Za-z_0-9]*')
@@ -98,8 +98,8 @@ def tokenize(text, base=0):
             continue
         for op in _MULTI_OPS:
             if text.startswith(op, i):
-                toks.append(('op', op, base + i, base + i + 2))
-                i += 2
+                toks.append(('op', op, base + i, base + i + len(op)))
+                i += len(op)
                 break
         else:
             if c in _SINGLE_OPS:
@@ -344,6 +344,11 @@ class Parser(object):
         if t[0] == 'kw' and t[1] in ('nil', 'true', 'false'):
             self.take()
             return ('kw', t[1], t[2], t[3])
+        if t[0] == 'kw' and t[1] == 'function':
+            return self._func_expr()
+        if t[0] == 'op' and t[1] == '...':
+            self.take()
+            return ('vararg', t[2], t[3])
         if t[0] == 'op' and t[1] == '(':
             self.take()
             e = self.parse_expr()
@@ -353,12 +358,50 @@ class Parser(object):
             return self._table()
         raise ParseError('expr: unexpected %r at %d' % (t[1], t[2]))
 
+    def _func_expr(self):
+        o = self.expect('kw', 'function')
+        self.expect('op', '(')
+        params = []
+        while not self.at('op', ')'):
+            if self.at('op', '...'):
+                params.append(self.take())
+                break
+            params.append(self.expect('name'))
+            if self.at('op', ','):
+                self.take()
+        self.expect('op', ')')
+        body = self.parse_block({'end'})
+        close = self.expect('kw', 'end')
+        return ('function', params, body, o[2], close[3])
+
     def parse_explist(self):
         out = [self.parse_expr()]
         while self.at('op', ','):
             self.take()
             out.append(self.parse_expr())
         return out
+
+    def _parse_if_generic(self):
+        start = self.peek()[2]
+        self.expect('kw', 'if')
+        branches = []
+        t = None
+        while True:
+            cond = self.parse_expr()
+            self.expect('kw', 'then')
+            body = self.parse_block({'elseif', 'else', 'end'})
+            branches.append((cond, body))
+            t = self.peek()
+            if t is not None and t[0] == 'kw' and t[1] == 'elseif':
+                self.take()
+                continue
+            break
+        els = []
+        if t is not None and t[0] == 'kw' and t[1] == 'else':
+            self.take()
+            els = self.parse_block({'end'})
+        close = self.expect('kw', 'end')
+        return ('if', branches, els, start, close[3])
 
     # ----- statements ----- #
     def parse_block(self, stops):
@@ -378,6 +421,22 @@ class Parser(object):
         if t[0] == 'kw':
             if t[1] == 'local':
                 self.take()
+                if self.at('kw', 'function'):
+                    self.take()
+                    nm = self.expect('name')
+                    self.expect('op', '(')
+                    params = []
+                    while not self.at('op', ')'):
+                        if self.at('op', '...'):
+                            params.append(self.take())
+                            break
+                        params.append(self.expect('name'))
+                        if self.at('op', ','):
+                            self.take()
+                    self.expect('op', ')')
+                    body = self.parse_block({'end'})
+                    close = self.expect('kw', 'end')
+                    return ('localfunc', nm[1], params, body, start, close[3])
                 names = [self.expect('name')]
                 while self.at('op', ','):
                     self.take()
@@ -402,6 +461,48 @@ class Parser(object):
             if t[1] == 'break':
                 self.take()
                 return ('break', start, t[3])
+            if t[1] == 'while':
+                self.take()
+                cond = self.parse_expr()
+                self.expect('kw', 'do')
+                body = self.parse_block({'end'})
+                close = self.expect('kw', 'end')
+                return ('while', cond, body, start, close[3])
+            if t[1] == 'repeat':
+                self.take()
+                body = self.parse_block({'until'})
+                self.expect('kw', 'until')
+                cond = self.parse_expr()
+                return ('repeat', body, cond, start, _e(cond))
+            if t[1] == 'for':
+                self.take()
+                names = [self.expect('name')]
+                while self.at('op', ','):
+                    self.take()
+                    names.append(self.expect('name'))
+                head = []
+                if self.at('op', '='):
+                    self.take()
+                    head = [self.parse_expr()]
+                    self.expect('op', ',')
+                    head.append(self.parse_expr())
+                    if self.at('op', ','):
+                        self.take()
+                        head.append(self.parse_expr())
+                else:
+                    self.expect('kw', 'in')
+                    head = self.parse_explist()
+                self.expect('kw', 'do')
+                body = self.parse_block({'end'})
+                close = self.expect('kw', 'end')
+                return ('for', [n[1] for n in names], head, body, start, close[3])
+            if t[1] == 'do':
+                self.take()
+                body = self.parse_block({'end'})
+                close = self.expect('kw', 'end')
+                return ('do', body, start, close[3])
+            if t[1] == 'if':
+                return self._parse_if_generic()
             raise ParseError('stmt: unexpected keyword %r at %d' % (t[1], t[2]))
         e = self.parse_expr()
         if self.at('op', ',') or self.at('op', '='):

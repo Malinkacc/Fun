@@ -441,6 +441,44 @@ semantics via the S/m/W tables, then block-level decompiler).
 incl. bounded miss; entry extraction; mini tree with multi-assign tail +
 indirect lookup).  opmap STEP 27 added.
 
+## WeAreDevs runtime names & slot map (slice 2c-2, `wearedevs/rt_names.py`)
+
+Static resolution of the flattened program's vocabulary:
+
+* NAME DECODER (verbatim anchor): `local function m(m) return V[m+10322] end`
+  -- magic ints ARE array indices (1-based Lua, offset 10322).
+* ORDER: V is rotated BEFORE decryption -- three in-place reversal passes
+  `{1..8233}, {1..209}, {210..8233}` (step formulas fold to 1/1); the net
+  permutation = rotate the tail-209 block to the front.  The slice-4b
+  mirror decoded the unrotated order (per-entry codecs were right, global
+  order was not) -- `rt_names` composes rotate01(raw) then the 4b codecs.
+* SLOT MAP (19 targets = 19 values, parsed structurally with the 2c-1
+  Parser): p decref; K 0; U/y/c/B/r/T/n/I/J/v/w closure makers with inner
+  arities 8/1/7/varargs/4/10/5/2/0/3/6; i refcount++ + env-proxy
+  (metamethod keys DECODED: `__index`, `__gc`, `__len`); h {} refcounts;
+  W {} name->value store; O id-allocator (K=K+1; h[K]=1); C decref-array;
+  Q THE DISPATCHER function(Q,q,S,A).  Wrapper params: S=setmetatable,
+  V=getfenv() (env), A=getmetatable, N=select, q=newproxy, l={...},
+  Y=unpack; entry = `B(4635360,{})(Y(l))` = main varargs closure applied
+  to unpack(script args).
+* GROUND TRUTHS (all [OK] on the real sample): m(-2896)='unpack' (the
+  `unpack or table[m(...)]` fallback idiom), magic keys __index/__gc/
+  __len; 10391 m() call sites resolved 8231 distinct ints, 0 misses;
+  identifiers include game/string/table/math/concat/cloneref/
+  WaitForChild/InvokeServer/FindFirstChild/fireclickdetector/listfiles/
+  gmatch/UDim/BuildConfigSection + the renamed 12-char identifiers.
+
+Parser upgrades shipped in `dispatch_map.py` (needed for the slot map):
+`function` expressions (params incl. `...`), `while/repeat/for/do/if`
+statements, `local function`, `...` token (lexer len-op fix).  The
+2c-1 tree results are unchanged (6/6 still green).
+
+`rt_names --test` is 6/6 (rotation steps; reversal mirror; decoder
+offset; out-of-range safety; slot-map shape; magic-int extraction).
+opmap STEP 28 added.  Output: `wd_names.json` (m_table, slot map, magic
+keys, stats) -- together with `wd_dispatch.json` the base for the
+block-level decompiler (2c-3).
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -451,7 +489,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-27 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-28 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -459,4 +497,4 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
-(27).
+(27), wearedevs rt_names (28).
