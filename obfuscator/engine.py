@@ -190,6 +190,26 @@ class Obfuscator:
         t_start = time.time()
         self._log(f"🚀 NZL Obfuscator — level={level}, seed={self.seed}")
 
+        # ── INSANE: Luraph-style VM obfuscation ──
+        if level == 'insane':
+            try:
+                from obfuscator.luraph_vm import obfuscate_script
+                final = self._stage(
+                    "LuraphVM",
+                    lambda: obfuscate_script(source, seed=self.seed)
+                )
+                self.stats['output_size'] = len(final)
+                self.stats['total_time'] = time.time() - t_start
+                self._log(
+                    f"✅ Готово: {self.stats['input_size']} → {self.stats['output_size']} байт "
+                    f"за {self.stats['total_time']*1000:.1f} ms"
+                )
+                return final
+            except Exception as e:
+                self._log(f"⚠️  LuraphVM упал: {e}, fallback to standard pipeline")
+                if self.verbose:
+                    traceback.print_exc()
+
         # ── STAGE 1: LEX ──
                 # ⚡ VM Preprocessing — ищем -- @vm маркеры в исходнике
         if config.get('vm_protection'):
@@ -680,7 +700,7 @@ local result = add(2, 3)
             test("insane + @vm: результат не пустой", len(result) > 0)
             # Проверяем что vm_protection этап был
             stage_names = [s[0] for s in obf.stats['stages']]
-            test("VMProtection этап выполнился", 'VMProtection' in stage_names,
+            test("VMProtection этап выполнился", 'VMProtection' in stage_names or 'LuraphVM' in stage_names,
                  f"stages={stage_names}")
         except Exception as e:
             test("insane + @vm: не падает", False, str(e)[:120])
