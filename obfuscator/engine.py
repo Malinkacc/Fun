@@ -93,13 +93,13 @@ class Obfuscator:
         self._log(f"🚀 NZL Obfuscator ULTRA — seed={self.seed}")
 
         try:
-            from obfuscator.ultra_obf import ultra_obfuscate
+            from obfuscator.symbiote_obf import obfuscate_script as symbiote_obf
             final = self._stage(
-                "ULTRA",
-                lambda: ultra_obfuscate(source, seed=self.seed)
+                "SymbioteCFF",
+                lambda: symbiote_obf(source, seed=self.seed)
             )
         except Exception as e:
-            self._log(f"⚠️  ULTRA упал: {e}, fallback chain...")
+            self._log(f"⚠️  Symbiote упал: {e}, fallback chain...")
             if self.verbose:
                 traceback.print_exc()
             final = self._fallback(source)
