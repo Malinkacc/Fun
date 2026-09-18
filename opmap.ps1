@@ -235,7 +235,7 @@ $o32 | Select-Object -Last 2
 if ($c32 -ne 0) { $fail = 1; Write-Host "[XX] closures self-test FAILED"; $o32 | Select-Object -Last 6 } else { Write-Host "[OK] wearedevs closures self-test passed" }
 
 Write-Host ""
-Write-Host "== STEP 33: bot sprint7 core self-test (head-less, expect 3/3)"
+Write-Host "== STEP 33: bot sprint7 core self-test (head-less, expect 6/6)"
 $o33 = py -m bot.sprint7 --test 2>&1
 $c33 = $LASTEXITCODE
 $o33 | Select-Object -Last 2

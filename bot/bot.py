@@ -221,128 +221,6 @@ async def cmd_ping(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
-# ── /help ──────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="help", description="Список команд")
-async def cmd_help(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📖 NZL Obfuscator — Помощь",
-        description=(
-            f"Обфускатор Lua/Luau уровня **Luraph Premium**\n"
-            f"{DISCORD_LINK}"
-        ),
-        color=COLOR_INFO,
-    )
-
-    embed.add_field(
-        name="/obfuscate",
-        value=(
-            "Обфусцировать `.lua` / `.txt` файл\n"
-            "`level` — `medium`, `hard` или `insane`\n"
-            "`shape` — фигурка животного из кода (опционально)\n"
-            "`username` — имя в header (опционально)\n\n"
-            "**Insane:** функции с маркером `-- @vm` автоматически\n"
-            "компилируются в VM bytecode."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="/deobfuscate",
-        value=(
-            "Деобфусцировать `.lua` / `.txt` файл\n"
-            "`level` — `basic`, `full` или `vm`\n\n"
-            "Поддерживает: **Luraph, IronBrew, NZL, Prometheus, MoonSec**\n"
-            "9-этапный pipeline: cleanup → decrypt → unflatten → rename → beautify"
-        ),
-        inline=False,
-    )
-    embed.add_field(name="/levels", value="Описание уровней обфускации", inline=False)
-    embed.add_field(name="/shapes", value="Список доступных фигурок", inline=False)
-    embed.add_field(name="/ping", value="Проверка работы бота", inline=False)
-    embed.add_field(name="/settings", value="Настройки бота (только владелец)", inline=False)
-
-    embed.set_footer(text=f"NZL Obfuscator v{BOT_VERSION} • {DISCORD_LINK}")
-    await interaction.response.send_message(embed=embed)
-
-
-# ── /levels ────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="levels", description="Описание уровней обфускации")
-async def cmd_levels(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="🛡️ Уровни обфускации NZL",
-        description="Выбери уровень защиты для своего скрипта:",
-        color=COLOR_INFO,
-    )
-
-    embed.add_field(
-        name="🟡 medium",
-        value=(
-            "• Шифрование строк (XOR/RC4/Base85)\n"
-            "• Обфускация чисел\n"
-            "• Переименование переменных\n"
-            "• Мусорный код\n"
-            "• Header + Watermark\n"
-            "• Environment checks\n"
-            "⏱ Быстро | Размер ×3–5"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🔴 hard",
-        value=(
-            "• Всё из medium\n"
-            "• Control Flow Flattening\n"
-            "• Anti-tamper + Honeypots\n"
-            "• Anti-hook + Debug detection\n"
-            "• Integrity checks\n"
-            "• Minified output\n"
-            "⏱ Медленнее | Размер ×5–10"
-        ),
-        inline=False,
-    )
-
-    embed.add_field(
-        name="🔥 insane",
-        value=(
-            "• Всё из hard\n"
-            "• VM Protection по маркеру `-- @vm`\n"
-            "• Автокомпиляция отмеченных функций в VM bytecode\n"
-            "• Работает в Roblox / Luau\n"
-            "• Рекурсия поддерживается\n"
-            "• Лучший вариант для критичных функций\n"
-            "⏱ Самый тяжёлый | Размер может быть ×20–100+"
-        ),
-        inline=False,
-    )
-
-    embed.set_footer(text="Target: Luau (Roblox) • VM работает через @vm-маркеры")
-    await interaction.response.send_message(embed=embed)
-
-
-# ── /shapes ────────────────────────────────────────────────────────────────────
-@bot.tree.command(name="shapes", description="Список доступных фигурок кода")
-async def cmd_shapes(interaction: discord.Interaction):
-    masks = get_available_masks()
-
-    embed = discord.Embed(
-        title="🎨 Фигурки кода (Code Shaper)",
-        description=(
-            "Код визуально складывается в силуэт животного — как у Luraph!\n"
-            "Каждая '#' клетка = реальный рабочий Lua-код.\n"
-            "Используй опцию `shape` в `/obfuscate`."
-        ),
-        color=COLOR_INFO,
-    )
-
-    shapes_text = "\n".join(f"{SHAPE_EMOJI_MAP.get(m, '•')} `{m}`" for m in masks)
-    shapes_text += "\n🎲 `random` — случайная фигурка"
-    shapes_text += "\n⬛ `none` — без фигурки"
-
-    embed.add_field(name="Доступные маски", value=shapes_text, inline=False)
-    embed.set_footer(text="Фигурки обёрнуты в do...end — не влияют на работу скрипта")
-    await interaction.response.send_message(embed=embed)
-
-
 # ── /obfuscate ─────────────────────────────────────────────────────────────────
 @bot.tree.command(name="obfuscate", description="Обфусцировать Lua/Luau скрипт")
 @app_commands.describe(
@@ -597,15 +475,20 @@ async def cmd_deobfuscate(
         progress_msg = None
 
     def _do_deobfuscate():
+        auto = _s7.deobf_auto(source)
+        if auto is not None:
+            return {'kind': auto[0], 'text': auto[1], 'info': auto[2]}
         engine = DeobfuscatorEngine(level=level_val, verbose=False)
-        return engine.deobfuscate(source)
+        result, logs = engine.deobfuscate(source)
+        return {'kind': 'engine', 'text': result,
+                'info': '\n'.join([l for l in logs if l.strip()])}
 
     t0 = time.perf_counter()
     try:
         loop = asyncio.get_running_loop()
         # 10 минут для VM level, 5 минут для остальных
         timeout = 600.0 if level_val == "vm" else 300.0
-        result, logs = await asyncio.wait_for(
+        out = await asyncio.wait_for(
             loop.run_in_executor(None, _do_deobfuscate),
             timeout=timeout,
         )
@@ -632,21 +515,28 @@ async def cmd_deobfuscate(
         return
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    output_size = len(result)
+    kind = out['kind']
+    text = out['text']
+    info_text = out['info']
+    output_size = len(text)
     reduction = round((1 - output_size / max(input_size, 1)) * 100, 1)
 
     print(f"[bot] ✅ ГОТОВО за {elapsed_ms:.1f} мс → {fmt_size(output_size)} (-{reduction}%)\n")
 
-    clean_logs = [l for l in logs if l.strip()]
+    clean_logs = [l for l in info_text.splitlines() if l.strip()]
     log_text = "\n".join(clean_logs)
     if len(log_text) > 900:
         log_text = log_text[:900] + "\n... (обрезано)"
 
     deobf_level_emoji = {"basic": "🟢", "full": "🟡", "vm": "🔴"}.get(level_val, "⚙️")
 
-    embed = discord.Embed(title="🔍 Деобфускация завершена!", color=COLOR_OK)
+    _titles = {'moonsec': '🌙 MoonSec V3 — декомпиляция готова!',
+               'wearedevs': '🗺️ WeAreDevs — программа восстановлена!',
+               'engine': '🔍 Деобфускация завершена!'}
+    embed = discord.Embed(title=_titles.get(kind, '🔍 Деобфускация завершена!'), color=COLOR_OK)
     embed.add_field(name="📄 Файл", value=f"`{file.filename}`", inline=True)
-    embed.add_field(name=f"{deobf_level_emoji} Уровень", value=f"`{level_val}`", inline=True)
+    disp = kind if kind != 'engine' else level_val
+    embed.add_field(name=f"{deobf_level_emoji} Уровень", value=f"`{disp}`", inline=True)
     embed.add_field(name="⏱ Время", value=f"`{elapsed_ms/1000:.1f} сек`", inline=True)
     embed.add_field(name="📥 Вход", value=f"`{fmt_size(input_size)}`", inline=True)
     embed.add_field(name="📤 Выход", value=f"`{fmt_size(output_size)}`", inline=True)
@@ -661,7 +551,8 @@ async def cmd_deobfuscate(
     )
 
     base = file.filename.rsplit(".", 1)[0]
-    out_name = f"{base}_deobf_{level_val}.lua"
+    _suffix = {'moonsec': '_moonsec', 'wearedevs': '_wd'}.get(kind, '_deobf_' + level_val)
+    out_name = f"{base}{_suffix}.lua"
     out_buffer = io.BytesIO(result.encode("utf-8"))
     out_file = discord.File(out_buffer, filename=out_name)
 
@@ -670,280 +561,15 @@ async def cmd_deobfuscate(
     else:
         await interaction.followup.send(embed=embed, file=out_file)
 
-    # ── Проверка доступа ──
-    allowed, reason = check_access(interaction)
-    if not allowed:
-        await interaction.followup.send(
-            embed=make_error_embed("Нет доступа", reason),
-            ephemeral=True,
-        )
-        return
-
-    # ── Проверка формата ──
-    if not (file.filename.endswith(".lua") or file.filename.endswith(".txt")):
-        await interaction.followup.send(
-            embed=make_error_embed("Неверный формат", "Только `.lua` или `.txt` файлы"),
-            ephemeral=True,
-        )
-        return
-
-    if file.size > MAX_CODE_SIZE:
-        await interaction.followup.send(
-            embed=make_error_embed(
-                "Файл слишком большой",
-                f"Максимум: {fmt_size(MAX_CODE_SIZE)}\nТвой файл: {fmt_size(file.size)}",
-            ),
-            ephemeral=True,
-        )
-        return
-
-    # ── Читаем файл ──
-    try:
-        raw = await file.read()
-        source = decode_bytes(raw)
-    except Exception as e:
-        await interaction.followup.send(
-            embed=make_error_embed("Ошибка чтения", str(e)),
-            ephemeral=True,
-        )
-        return
-
-    level_val = level.value
-    input_size = len(source)
-
-    print(f"\n[bot] ═══════════════════════════════════════════════")
-    print(f"[bot] 🔍 START deobfuscate: {file.filename}")
-    print(f"[bot]    size={fmt_size(input_size)}, level={level_val}")
-    print(f"[bot]    user={interaction.user.name} ({interaction.user.id})")
-
-    def _do_deobfuscate():
-        engine = DeobfuscatorEngine(level=level_val, verbose=False)
-        return engine.deobfuscate(source)
-
-    t0 = time.perf_counter()
-    try:
-        loop = asyncio.get_running_loop()
-        result, logs = await asyncio.wait_for(
-            loop.run_in_executor(None, _do_deobfuscate),
-            timeout=120.0,
-        )
-    except asyncio.TimeoutError:
-        print("[bot] ⏱ ТАЙМАУТ деобфускации: > 120 сек")
-        await interaction.followup.send(
-            embed=make_error_embed("Таймаут", "Деобфускация заняла > 2 минут."),
-            ephemeral=True,
-        )
-        return
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[bot] ❌ Ошибка деобфускации:\n{tb}")
-        await interaction.followup.send(
-            embed=make_error_embed("Ошибка деобфускации", f"```\n{str(e)[:400]}\n```"),
-            ephemeral=True,
-        )
-        return
-
-    elapsed_ms = (time.perf_counter() - t0) * 1000
-    output_size = len(result)
-    reduction = round((1 - output_size / max(input_size, 1)) * 100, 1)
-
-    print(f"[bot] ✅ ГОТОВО за {elapsed_ms:.1f} мс → {fmt_size(output_size)} (-{reduction}%)\n")
-
-    # ── Форматируем лог ──
-    clean_logs = [l for l in logs if l.strip()]
-    log_text = "\n".join(clean_logs)
-    if len(log_text) > 900:
-        log_text = log_text[:900] + "\n... (обрезано)"
-
-    # ── Embed ──
-    deobf_level_emoji = {"basic": "🟢", "full": "🟡", "vm": "🔴"}.get(level_val, "⚙️")
-
-    embed = discord.Embed(
-        title="🔍 Деобфускация завершена!",
-        color=COLOR_OK,
-    )
-    embed.add_field(name="📄 Файл", value=f"`{file.filename}`", inline=True)
-    embed.add_field(name=f"{deobf_level_emoji} Уровень", value=f"`{level_val}`", inline=True)
-    embed.add_field(name="⏱ Время", value=f"`{elapsed_ms:.1f} мс`", inline=True)
-    embed.add_field(name="📥 Вход", value=f"`{fmt_size(input_size)}`", inline=True)
-    embed.add_field(name="📤 Выход", value=f"`{fmt_size(output_size)}`", inline=True)
-    embed.add_field(
-        name="📊 Сжатие",
-        value=f"`-{reduction}%`" if reduction > 0 else f"`+{abs(reduction)}%`",
-        inline=True,
-    )
-    embed.add_field(name="📋 Pipeline лог", value=f"```\n{log_text}\n```", inline=False)
-    embed.set_footer(
-        text=f"NZL Deobfuscator v2.0 • {DISCORD_LINK} • {interaction.user.display_name}"
-    )
-
-    # ── Имя выходного файла (работает и с .lua и с .txt) ──
-    base = file.filename.rsplit(".", 1)[0]
-    out_name = f"{base}_deobf_{level_val}.lua"
-    out_buffer = io.BytesIO(result.encode("utf-8"))
-
-    await interaction.followup.send(
-        embed=embed,
-        file=discord.File(out_buffer, filename=out_name),
-    )
-
-
-# ── /settings ──────────────────────────────────────────────────────────────────
-settings_group = app_commands.Group(
-    name="settings",
-    description="Настройки бота (только владелец)",
-)
-
-
-@settings_group.command(name="add_channel", description="Добавить разрешённый канал")
-@app_commands.describe(channel="Канал, где бот будет работать")
-async def sg_add_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if channel.id in config["allowed_channels"]:
-        await interaction.response.send_message(f"⚠️ Канал {channel.mention} уже в whitelist", ephemeral=True)
-        return
-    config["allowed_channels"].append(channel.id)
-    save_config(config)
-    await interaction.response.send_message(f"✅ Канал {channel.mention} добавлен", ephemeral=True)
-
-
-@settings_group.command(name="remove_channel", description="Убрать канал из whitelist")
-@app_commands.describe(channel="Канал для удаления")
-async def sg_remove_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if channel.id not in config["allowed_channels"]:
-        await interaction.response.send_message(f"⚠️ Канала {channel.mention} нет в whitelist", ephemeral=True)
-        return
-    config["allowed_channels"].remove(channel.id)
-    save_config(config)
-    await interaction.response.send_message(f"✅ Канал {channel.mention} удалён", ephemeral=True)
-
-
-@settings_group.command(name="clear_channels", description="Очистить whitelist каналов")
-async def sg_clear_channels(interaction: discord.Interaction):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    config["allowed_channels"] = []
-    save_config(config)
-    await interaction.response.send_message("✅ Whitelist каналов очищен", ephemeral=True)
-
-
-@settings_group.command(name="add_role", description="Добавить разрешённую роль")
-@app_commands.describe(role="Роль, которая получит доступ")
-async def sg_add_role(interaction: discord.Interaction, role: discord.Role):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if role.id in config["allowed_roles"]:
-        await interaction.response.send_message(f"⚠️ Роль {role.mention} уже в whitelist", ephemeral=True)
-        return
-    config["allowed_roles"].append(role.id)
-    save_config(config)
-    await interaction.response.send_message(f"✅ Роль {role.mention} добавлена", ephemeral=True)
-
-
-@settings_group.command(name="remove_role", description="Убрать роль из whitelist")
-@app_commands.describe(role="Роль для удаления")
-async def sg_remove_role(interaction: discord.Interaction, role: discord.Role):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if role.id not in config["allowed_roles"]:
-        await interaction.response.send_message(f"⚠️ Роли {role.mention} нет в whitelist", ephemeral=True)
-        return
-    config["allowed_roles"].remove(role.id)
-    save_config(config)
-    await interaction.response.send_message(f"✅ Роль {role.mention} удалена", ephemeral=True)
-
-
-@settings_group.command(name="clear_roles", description="Очистить whitelist ролей")
-async def sg_clear_roles(interaction: discord.Interaction):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    config["allowed_roles"] = []
-    save_config(config)
-    await interaction.response.send_message("✅ Whitelist ролей очищен", ephemeral=True)
-
-
-@settings_group.command(name="add_owner", description="Добавить со-владельца бота")
-@app_commands.describe(user="Пользователь, которому дать права владельца")
-async def sg_add_owner(interaction: discord.Interaction, user: discord.User):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if user.id in config["owner_ids"]:
-        await interaction.response.send_message(f"⚠️ {user.mention} уже владелец", ephemeral=True)
-        return
-    config["owner_ids"].append(user.id)
-    save_config(config)
-    await interaction.response.send_message(f"👑 {user.mention} теперь со-владелец", ephemeral=True)
-
-
-@settings_group.command(name="remove_owner", description="Убрать со-владельца")
-@app_commands.describe(user="Пользователь для удаления из владельцев")
-async def sg_remove_owner(interaction: discord.Interaction, user: discord.User):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-    if user.id not in config["owner_ids"]:
-        await interaction.response.send_message(f"⚠️ {user.mention} не владелец", ephemeral=True)
-        return
-    if len(config["owner_ids"]) <= 1:
-        await interaction.response.send_message("❌ Нельзя удалить последнего владельца!", ephemeral=True)
-        return
-    config["owner_ids"].remove(user.id)
-    save_config(config)
-    await interaction.response.send_message(f"✅ {user.mention} больше не владелец", ephemeral=True)
-
-
-@settings_group.command(name="show", description="Показать текущие настройки")
-async def sg_show(interaction: discord.Interaction):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Только владелец бота", ephemeral=True)
-        return
-
-    embed = discord.Embed(title="⚙️ Настройки бота", color=COLOR_OWNER)
-
-    if config["allowed_channels"]:
-        ch_text = "\n".join(f"• <#{c}>" for c in config["allowed_channels"])
-    else:
-        ch_text = "*Все каналы разрешены*"
-    embed.add_field(name="📺 Каналы", value=ch_text, inline=False)
-
-    if config["allowed_roles"]:
-        ro_text = "\n".join(f"• <@&{r}>" for r in config["allowed_roles"])
-    else:
-        ro_text = "*Все роли разрешены*"
-    embed.add_field(name="👥 Роли", value=ro_text, inline=False)
-
-    if config.get("owner_ids"):
-        ow_text = "\n".join(f"• <@{o}>" for o in config["owner_ids"])
-    else:
-        ow_text = "*Не установлены*"
-    embed.add_field(name="👑 Владельцы", value=ow_text, inline=False)
-
-    embed.set_footer(text=f"NZL Obfuscator v{BOT_VERSION}")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-bot.tree.add_command(settings_group)
-
-
-# ── Запуск ─────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    bot.run(TOKEN)
-
-# -- Sprint 7 tools (slice 2e-1): /moonsec /wdmap /coverage --
+# -- Sprint 7 tools (slices 2e-1..2e-4): family auto-detect inside /deobfuscate --
 # loaded by path so `py bot\bot.py` (script-style launch) works too
 import importlib.util as _ilu
 _s7p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprint7.py")
 _s7spec = _ilu.spec_from_file_location("nzl_sprint7", _s7p)
 _s7 = _ilu.module_from_spec(_s7spec)
 _s7spec.loader.exec_module(_s7)
-_s7.register_sprint7(bot, globals())
+
+# ── Запуск ─────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    bot.run(TOKEN)
+

@@ -590,29 +590,37 @@ bodies/ifs/gotos).  `--test` is 6/6 (creation collection; non-maker
 ignored; non-const state ignored; varargs B; island BFS sizes; re-run
 stability).  opmap STEP 32.
 
-## Bot integration (slice 2e-1, `bot/sprint7.py`)
+## Bot integration (slices 2e-1..2e-4, `bot/sprint7.py` + `bot/bot.py`)
 
-The three sprint-7 tools are now Discord slash commands.  Zero touch on
-the existing 7 bot commands: a NEW module `bot/sprint7.py` registers
-them; `bot/bot.py` gets exactly two lines appended at the end
-(`from bot.sprint7 import register_sprint7` + call with `globals()`) so
-the new commands reuse the bot's own access control, embed helpers,
-colors and file-size limits.
+The Discord bot now exposes exactly THREE commands: /obfuscate,
+/deobfuscate, /ping (user request: "нужны 2 команды + ping").  All
+sprint-7 power lives INSIDE /deobfuscate through family auto-detection:
 
-* `/moonsec file [struct]` -- MoonSec V3 -> readable `.lua` back in the
-  channel (stats embed: blob/seed/consume, protos/slots/macros/dead,
-  structured counts); falls back to an honest error embed if the file is
-  not MoonSec V3 (the chain refuses, nothing guessed);
-* `/wdmap file` -- WeAreDevs closure map (creations/closures, tree
-  partition %, top-8 sizes) + `wd_closures.json` attachment;
-* `/coverage` -- the live coverage panel: overall embed (92.5% vs
-  baseline 15%) + `coverage.md` attachment.
+* `sprint7.deobf_auto(src)` -- MoonSec V3 -> the full chain decompile
+  (embed title "MoonSec V3 — декомпиляция готова", stats embed, output
+  `*_moonsec.lua`); WeAreDevs -> block lift with decoded names
+  (`*_wd.lua`, info shows blocks/creations); anything else -> the bot's
+  own engine pipeline as before (output `*_deobf_<level>.lua`);
+* the old /moonsec /wdmap /coverage commands were removed together with
+  /help /levels /shapes /settings (the core functions
+  run_moonsec/run_wdmap/run_coverage stay in sprint7.py and are covered
+  by the head-less self-test);
+* fixed the pre-existing double-execution bug: cmd_deobfuscate had a
+  copy-pasted second body AFTER its final send (every deobfuscation ran
+  twice and posted twice);
+* wiring: bot/bot.py loads bot/sprint7.py BY PATH (importlib.util) just
+  before the run block -- `py bot\bot.py` (script-style) resolves `bot`
+  to bot.py itself, so package imports self-import and crash; lessons:
+  py_compile does NOT catch wrong-name usage (NameError at runtime);
+  bot.py carries a UTF-8 BOM (read utf-8-sig).
 
-Heavy work runs in the executor (timeouts 120-300 s; real samples need
-0.1 s / 10 s / 18 s).  Head-less core is discord-free and self-tested:
-`py -m bot.sprint7 --test` = 3/3 (moonsec core on the real sample;
-coverage overall 92.5%; wdmap 495 closures / 99.8% partition).
-opmap STEP 33.
+User-verified on their machine: `py -m bot.sprint7 --test` = 3/3
+(2e-2), then the bot itself started with their token: 1 warmup, "Sprint-7
+зарегистрированы", 10 slash commands synced (2e-3 round), then the final
+3-command layout (2e-4).  `--test` is now 6/6: moonsec core; coverage
+core (overall 92.5%); deobf_auto->moonsec; deobf_auto->wearedevs (3362
+blocks, 494 creations); deobf_auto->None on Luraph; wdmap core (495
+closures / 99.8%).  opmap STEP 33 expectation updated to 6/6.
 
 ## Sandbox correctness fix (this sprint)
 
