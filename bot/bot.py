@@ -24,11 +24,6 @@ _t_import = time.perf_counter()
 
 from obfuscator.engine import Obfuscator
 from obfuscator.protection.watermark import DISCORD_LINK, OWNER_IDS
-from obfuscator.utils.code_shaper import (
-    get_available_masks,
-    get_random_mask_name,
-    shape_code,
-)
 from obfuscator.deobfuscator.engine import DeobfuscatorEngine  # v3.0 REAL
 
 # Прогрев — прогоняем пустышку, чтобы все ленивые импорты сработали
@@ -83,22 +78,7 @@ DEOBF_LEVEL_CHOICES = [
     app_commands.Choice(name="🔴 VM     — + декомпилировать VM (NZL insane)", value="vm"),
 ]
 
-_SHAPE_CHOICES = [
-    app_commands.Choice(name="⬛ Без фигурки", value="none"),
-    app_commands.Choice(name="🎲 Случайная", value="random"),
-    app_commands.Choice(name="🐙 Осьминог", value="octopus"),
-    app_commands.Choice(name="💀 Череп", value="skull"),
-    app_commands.Choice(name="😈 Демон", value="demon"),
-    app_commands.Choice(name="🐺 Волк", value="wolf"),
-    app_commands.Choice(name="🕷️ Паук", value="spider"),
-    app_commands.Choice(name="🐉 Дракон", value="dragon"),
-    app_commands.Choice(name="❤️ Сердце", value="heart"),
-]
 
-SHAPE_EMOJI_MAP = {
-    "octopus": "🐙", "skull": "💀", "demon": "😈", "wolf": "🐺",
-    "spider": "🕷️", "dragon": "🐉", "heart": "❤️",
-}
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "bot_config.json")
