@@ -1,1 +1,0 @@
-LUA ERROR: [string "local _mod = function() -- Чистая ре�.."]:131: 'in' expected near '='
