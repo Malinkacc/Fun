@@ -240,14 +240,21 @@ def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
     # Decrypt
     parts.append(f'local dd=t(bb:sub(1,{orig_len}),cc)')
     
-    # Execute via loadstring (try multiple methods for executor compatibility)
+    # Execute via loadstring with error handling
     parts.append(
         'local ee=loadstring or load '
-        'if ee then ee(dd)() '
+        'if ee then '
+        'local ok,fn_or_err=pcall(ee,dd) '
+        'if ok and type(fn_or_err)=="function" then '
+        'local ok2,err2=pcall(fn_or_err) '
+        'if not ok2 then error("Execution error: "..tostring(err2)) end '
+        'elseif ok then '
+        'error("loadstring returned: "..type(fn_or_err)) '
         'else '
-        'local ff=getfenv and getfenv() or _G '
-        'local gg=ff["\\108\\111\\97\\100\\115\\116\\114\\105\\110\\103"] '
-        'if gg then gg(dd)() end '
+        'error("loadstring failed: "..tostring(fn_or_err)) '
+        'end '
+        'else '
+        'error("loadstring not available") '
         'end'
     )
     
