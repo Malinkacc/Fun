@@ -198,7 +198,7 @@ def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
         'end'
     )
     
-    # RC4 decrypt function
+    # RC4 decrypt function (with bit32 fallback)
     parts.append(
         'local function t(u,v)'
         'local w={}'
@@ -210,12 +210,19 @@ def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
         'end '
         'local z="" '
         'local x2,y2=0,0 '
+        'local bxor=bit32 and bit32.bxor or function(a,b) '
+        'local r,c,l=0,1,1 '
+        'while a>0 or b>0 do '
+        'if (a%2)~=(b%2) then r=r+c end '
+        'a,b,c=math.floor(a/2),math.floor(b/2),c*2 '
+        'end '
+        'return r end '
         'for x=1,#u do '
         'x2=(x2+1)%256 '
         'y2=(y2+w[x2])%256 '
         'w[x2],w[y2]=w[y2],w[x2] '
         'local aa=w[(w[x2]+w[y2])%256] '
-        'z=z..string.char(bit32.bxor(u:byte(x),aa)) '
+        'z=z..string.char(bxor(u:byte(x),aa)) '
         'end '
         'return z '
         'end'
