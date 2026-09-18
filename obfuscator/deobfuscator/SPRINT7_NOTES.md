@@ -403,6 +403,44 @@ never costs correctness:
 if-return; if nested in repeat; interior-jump fallback with labels).
 opmap STEP 26 added.  `decompile.py` gained `--struct`.
 
+## WeAreDevs v1 flattened dispatch tree (slice 2c-1, `wearedevs/dispatch_map.py`)
+
+The sample is NOT a bytecode VM.  After the string-array decrypt (slice 4b)
+the program runs as a Prometheus-style flattened state machine, all inside
+one dispatcher `function(Q,q,S,A)` (slot Q of the big simultaneous
+assignment at ~offset 130.5k):
+
+* `while Q do <if-tree> end` -- a nested binary search over the numeric
+  state variable Q with folded-constant predicates (`Q>699130+7433818`,
+  `2804890624%12750735>Q`, all three spellings equivalent after folding);
+* leaves = linear basic blocks of the original program; Q is ALSO used as
+  a temporary inside blocks, so a leaf's transition is its LAST assignment
+  to plain `Q`, not its last statement;
+* transitions: `Q=<const>` straight, `Q=x and A or B` conditional branch,
+  `Q=nil` halt, `Q=<table lookup>` indirect (665 -- data-dependent);
+* entry = `return(B(4635360,{}))(Y(l))` -> state 4635360 (B builds the
+  entry closure; Y(l) = unpack(varargs) = the original script arguments).
+
+`dispatch_map.py` folds constants on the TOKEN stream (runs of
+num/+-/%()/ tokens, prefix-position rule so call parens survive: `m(a-b)`
+stays a call; balanced-prefix cut; floats like `482112+-482111.5` = 0.5
+supported), parses the tree structurally (expr parser handles and/or/not
+KEYWORDS, multi-assign with expanding call `C,x=K(i,C)`, index/table
+lvalues), derives each leaf's [lo,hi] range from its comparison path and
+VALIDATES that every transition target lands in exactly one leaf range.
+
+Real sample (1.58 MB region): 59505 folded consts, 3361 if-nodes ->
+3362 leaves (nodes+1 = perfect binary structure), 4020 transitions
+ALL resolved in-range (100.0%), distinct states 2849; kinds:
+straight=1374, cond=1323, indirect=665.  Entry leaf 2829 straight ->
+13048532.  Output: `wd_dispatch.json` (leaf spans, pred paths, ranges,
+transitions) -- the base graph for lifting slices (2c-2+: handler
+semantics via the S/m/W tables, then block-level decompiler).
+
+`--test` is 6/6 (folding; leaf ranges; transition kinds; range resolution
+incl. bounded miss; entry extraction; mini tree with multi-assign tail +
+indirect lookup).  opmap STEP 27 added.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -413,11 +451,12 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-26 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-27 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
-moonsec decompile (25), moonsec msvm_struct (26).
+moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
+(27).

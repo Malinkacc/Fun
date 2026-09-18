@@ -192,6 +192,13 @@ $c26 = $LASTEXITCODE
 $o26 | Select-Object -Last 2
 if ($c26 -ne 0) { $fail = 1; Write-Host "[XX] msvm_struct self-test FAILED"; $o26 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_struct self-test passed" }
 
-Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26 self-test lines"
+Write-Host ""
+Write-Host "== STEP 27: wearedevs dispatch_map self-test (flattened dispatch tree, expect 6/6)"
+$o27 = py -m obfuscator.deobfuscator.wearedevs.dispatch_map --test 2>&1
+$c27 = $LASTEXITCODE
+$o27 | Select-Object -Last 2
+if ($c27 -ne 0) { $fail = 1; Write-Host "[XX] dispatch_map self-test FAILED"; $o27 | Select-Object -Last 6 } else { Write-Host "[OK] wearedevs dispatch_map self-test passed" }
+
+Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26/27 self-test lines"
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail
