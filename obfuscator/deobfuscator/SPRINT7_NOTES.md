@@ -512,6 +512,29 @@ sliced from the raw source and re-folded (`fold_render`), so
 chain; multi-assign; table constructor; m() miss kept verbatim).
 opmap STEP 29 added.
 
+## Coverage panel (slice 2d-1, `deobfuscator/coverage_panel.py`)
+
+One command, LIVE instant metrics only (no sandbox tracing; formulas
+printed next to every value):
+
+* Luraph v14.6 -- 97.4%: dispatch interval union 157 leaves over
+  [0..2^30] = 100%; known-opcode lift 2925 instrs with 151 honest
+  fallbacks = 94.8% (built-in frames dump).
+* MoonSec v3 -- 80.2%: stream 6843/6843 = 100%; protos 14/14 = 100%;
+  non-dead 516 slots (12 dead) = 97.7%; branch sites structured
+  16/69 = 23.2% (the honest goto-fallback share from 2b-12).
+* WeAreDevs v1.0.0 -- 100.0%: array 8233/8233; m() sites 10391/10391;
+  blocks 3362/3362; transitions 4020/4020 in-range.
+* MoonVeil 2.0.24 -- n/a (trace-based, sandbox-minutes; static anchors
+  listed: bootstrap decoder, 132 opcode words, rhythm cut).
+
+Overall (three families with live metrics): **92.5%** vs recorded
+baseline ~15% (Sprint 6 audit in the backlog).  Output: `coverage.md`
+markdown panel + `coverage.json`.  Family coverage = mean of its pct
+metrics; overall = mean over families with live data.  `--test` is 6/6
+(aggregation over pct-only; all-info family -> None; md rows + n/a;
+overall math; providers present; MoonVeil honest n/a).  opmap STEP 30.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -522,7 +545,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-29 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-30 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -530,4 +553,5 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
-(27), wearedevs rt_names (28), wearedevs block_lift (29).
+(27), wearedevs rt_names (28), wearedevs block_lift (29), coverage panel
+(30).
