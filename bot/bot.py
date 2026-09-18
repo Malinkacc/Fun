@@ -353,7 +353,7 @@ async def cmd_obfuscate(
         text=f"NZL v{BOT_VERSION} • {DISCORD_LINK} • {interaction.user.display_name}"
     )
 
-    out_name = f"nzl_{level_val}_{file.filename}"
+    out_name = f"nzl_{file.filename}"
     out_buffer = io.BytesIO(result.encode("utf-8"))
 
     await interaction.followup.send(
