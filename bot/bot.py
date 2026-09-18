@@ -24,11 +24,6 @@ _t_import = time.perf_counter()
 
 from obfuscator.engine import Obfuscator
 from obfuscator.protection.watermark import DISCORD_LINK, OWNER_IDS
-from obfuscator.utils.code_shaper import (
-    get_available_masks,
-    get_random_mask_name,
-    shape_code,
-)
 from obfuscator.deobfuscator.engine import DeobfuscatorEngine  # v3.0 REAL
 
 # Прогрев — прогоняем пустышку, чтобы все ленивые импорты сработали
@@ -53,40 +48,14 @@ COLOR_OWNER = 0x9B59B6
 MAX_FILE_SIZE = 25 * 1024 * 1024
 MAX_CODE_SIZE = 5 * 2000 * 2000
 
-LEVEL_META = {
-    "medium": {"emoji": "🟡", "title": "Medium", "short": "быстро и надёжно"},
-    "hard": {"emoji": "🔴", "title": "Hard", "short": "усиленная защита"},
-    "insane": {"emoji": "🔥", "title": "Insane", "short": "VM protection + максимум"},
-}
-
-LEVEL_CHOICES = [
-    app_commands.Choice(name="🟡 Medium — быстро и надёжно", value="medium"),
-    app_commands.Choice(name="🔴 Hard — усиленная защита", value="hard"),
-    app_commands.Choice(name="🔥 Insane — VM protection + максимум", value="insane"),
-]
+SINGLE_LEVEL = "insane"
+SINGLE_USERNAME = "NZL Studio"
 
 DEOBF_LEVEL_CHOICES = [
     app_commands.Choice(name="🟢 Basic  — убрать мусор (любой Lua)", value="basic"),
     app_commands.Choice(name="🟡 Full   — + расшифровать строки (NZL)", value="full"),
     app_commands.Choice(name="🔴 VM     — + декомпилировать VM (NZL insane)", value="vm"),
 ]
-
-_SHAPE_CHOICES = [
-    app_commands.Choice(name="⬛ Без фигурки", value="none"),
-    app_commands.Choice(name="🎲 Случайная", value="random"),
-    app_commands.Choice(name="🐙 Осьминог", value="octopus"),
-    app_commands.Choice(name="💀 Череп", value="skull"),
-    app_commands.Choice(name="😈 Демон", value="demon"),
-    app_commands.Choice(name="🐺 Волк", value="wolf"),
-    app_commands.Choice(name="🕷️ Паук", value="spider"),
-    app_commands.Choice(name="🐉 Дракон", value="dragon"),
-    app_commands.Choice(name="❤️ Сердце", value="heart"),
-]
-
-SHAPE_EMOJI_MAP = {
-    "octopus": "🐙", "skull": "💀", "demon": "😈", "wolf": "🐺",
-    "spider": "🕷️", "dragon": "🐉", "heart": "❤️",
-}
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "bot_config.json")
@@ -170,10 +139,6 @@ def make_error_embed(title: str, desc: str) -> discord.Embed:
     return discord.Embed(title=f"❌ {title}", description=desc, color=COLOR_ERR)
 
 
-def get_level_emoji(level_name: str) -> str:
-    return LEVEL_META.get(level_name, {}).get("emoji", "⚙️")
-
-
 def decode_bytes(raw: bytes) -> str:
     """Автоопределение кодировки файла."""
     if raw.startswith(b'\xff\xfe'):
@@ -223,22 +188,10 @@ async def cmd_ping(interaction: discord.Interaction):
 
 # ── /obfuscate ─────────────────────────────────────────────────────────────────
 @bot.tree.command(name="obfuscate", description="Обфусцировать Lua/Luau скрипт")
-@app_commands.describe(
-    file="Прикрепи .lua или .txt файл",
-    level="Уровень защиты",
-    shape="Фигурка животного из кода (опционально)",
-    username="Имя в header (опционально)",
-)
-@app_commands.choices(
-    level=LEVEL_CHOICES,
-    shape=_SHAPE_CHOICES,
-)
+@app_commands.describe(file="Прикрепи .lua или .txt файл")
 async def cmd_obfuscate(
     interaction: discord.Interaction,
     file: discord.Attachment,
-    level: app_commands.Choice[str],
-    shape: app_commands.Choice[str] | None = None,
-    username: str | None = None,
 ):
     await interaction.response.defer(thinking=True)
 
@@ -286,8 +239,8 @@ async def cmd_obfuscate(
 
     seed = random.randint(0, 2**32 - 1)
     owner_id = interaction.user.id if is_owner(interaction) else None
-    uname = username or interaction.user.display_name
-    level_val = level.value
+    uname = SINGLE_USERNAME
+    level_val = SINGLE_LEVEL
 
     print(f"\n[bot] ═══════════════════════════════════════════════")
     print(f"[bot] 🔄 START obfuscate: {file.filename}")
@@ -306,12 +259,12 @@ async def cmd_obfuscate(
         loop = asyncio.get_running_loop()
         result, stats, build_id = await asyncio.wait_for(
             loop.run_in_executor(None, _do_obfuscate),
-            timeout=120.0,
+            timeout=300.0,
         )
     except asyncio.TimeoutError:
-        print("[bot] ⏱ ТАЙМАУТ: > 120 сек")
+        print("[bot] ⏱ ТАЙМАУТ: > 300 сек")
         await interaction.followup.send(
-            embed=make_error_embed("Таймаут", "Обфускация заняла > 2 минут."),
+            embed=make_error_embed("Таймаут", "Обфускация заняла > 5 минут."),
             ephemeral=True,
         )
         return
@@ -327,48 +280,21 @@ async def cmd_obfuscate(
     elapsed_ms = (time.perf_counter() - t0) * 1000
     print(f"[bot] ✅ ГОТОВО за {elapsed_ms:.1f} мс → {fmt_size(len(result))}\n")
 
-    shape_name = shape.value if shape else "none"
-    shape_used = None
-
-    if shape_name != "none":
-        try:
-            rng = random.Random(seed)
-            if shape_name == "random":
-                shape_name = get_random_mask_name(rng)
-            result = shape_code(shape_name, rng=rng, real_code=result)
-            shape_used = shape_name
-        except Exception as e:
-            print(f"[bot] ⚠️ Ошибка code_shaper ({shape_name}): {e}")
-
     input_size = stats.get("input_size", len(code))
     output_size = stats.get("output_size", len(result))
     stages = stats.get("stages", {})
-
-    level_emoji = get_level_emoji(level_val)
 
     embed = discord.Embed(
         title="✅ Обфускация завершена!",
         color=COLOR_OK,
     )
     embed.add_field(name="📄 Файл", value=f"`{file.filename}`", inline=True)
-    embed.add_field(name=f"{level_emoji} Уровень", value=f"`{level_val}`", inline=True)
+    embed.add_field(name="🔥 Профиль", value=f"`{SINGLE_LEVEL} • максимум`", inline=True)
     embed.add_field(name="⏱ Время", value=f"`{elapsed_ms:.1f} мс`", inline=True)
     embed.add_field(name="📥 Вход", value=f"`{fmt_size(input_size)}`", inline=True)
     embed.add_field(name="📤 Выход", value=f"`{fmt_size(output_size)}`", inline=True)
     embed.add_field(name="📊 Раздутость", value=f"`{fmt_ratio(input_size, output_size)}`", inline=True)
     embed.add_field(name="🔑 Build ID", value=f"`{build_id}`", inline=True)
-    embed.add_field(name="👤 Owner", value=f"`{uname}`", inline=True)
-
-    if level_val == "insane":
-        embed.add_field(
-            name="🧠 VM Protection",
-            value="`-- @vm` функции будут завернуты в VM",
-            inline=True,
-        )
-
-    if shape_used:
-        shape_emoji = SHAPE_EMOJI_MAP.get(shape_used, "🎨")
-        embed.add_field(name="🎨 Фигурка", value=f"{shape_emoji} `{shape_used}`", inline=True)
 
     if stages:
         stage_items = []
@@ -395,10 +321,10 @@ async def cmd_obfuscate(
             embed.add_field(name="📋 Стадии", value=stages_text, inline=False)
 
     embed.set_footer(
-        text=f"NZL v{BOT_VERSION} • {DISCORD_LINK} • {interaction.user.display_name}"
+        text=f"NZL v{BOT_VERSION} • {DISCORD_LINK}"
     )
 
-    out_name = f"nzl_{level_val}_{file.filename}"
+    out_name = f"nzl_{file.filename}"
     out_buffer = io.BytesIO(result.encode("utf-8"))
 
     await interaction.followup.send(
@@ -407,7 +333,6 @@ async def cmd_obfuscate(
     )
 
 
-# ── /deobfuscate ───────────────────────────────────────────────────────────────
 # ── /deobfuscate ───────────────────────────────────────────────────────────────
 @bot.tree.command(name="deobfuscate", description="Деобфусцировать Lua скрипт")
 @app_commands.describe(
