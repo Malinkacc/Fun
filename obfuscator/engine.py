@@ -190,13 +190,13 @@ class Obfuscator:
         t_start = time.time()
         self._log(f"🚀 NZL Obfuscator — level={level}, seed={self.seed}")
 
-        # ── INSANE: Luraph-style VM obfuscation ──
+        # ── INSANE: Symbiote-style control flow flattening ──
         if level == 'insane':
             try:
-                from obfuscator.luraph_vm import obfuscate_script
+                from obfuscator.symbiote_obf import obfuscate_script as symbiote_obf
                 final = self._stage(
-                    "LuraphVM",
-                    lambda: obfuscate_script(source, seed=self.seed)
+                    "SymbioteCFF",
+                    lambda: symbiote_obf(source, seed=self.seed)
                 )
                 self.stats['output_size'] = len(final)
                 self.stats['total_time'] = time.time() - t_start
@@ -206,9 +206,21 @@ class Obfuscator:
                 )
                 return final
             except Exception as e:
-                self._log(f"⚠️  LuraphVM упал: {e}, fallback to standard pipeline")
+                self._log(f"⚠️  SymbioteCFF упал: {e}, fallback to LuraphVM")
                 if self.verbose:
                     traceback.print_exc()
+                # Fallback to LuraphVM
+                try:
+                    from obfuscator.luraph_vm import obfuscate_script
+                    final = self._stage(
+                        "LuraphVM",
+                        lambda: obfuscate_script(source, seed=self.seed)
+                    )
+                    self.stats['output_size'] = len(final)
+                    self.stats['total_time'] = time.time() - t_start
+                    return final
+                except Exception as e2:
+                    self._log(f"⚠️  LuraphVM тоже упал: {e2}, fallback to standard pipeline")
 
         # ── STAGE 1: LEX ──
                 # ⚡ VM Preprocessing — ищем -- @vm маркеры в исходнике
@@ -700,7 +712,7 @@ local result = add(2, 3)
             test("insane + @vm: результат не пустой", len(result) > 0)
             # Проверяем что vm_protection этап был
             stage_names = [s[0] for s in obf.stats['stages']]
-            test("VMProtection этап выполнился", 'VMProtection' in stage_names or 'LuraphVM' in stage_names,
+            test("VMProtection этап выполнился", 'VMProtection' in stage_names or 'LuraphVM' in stage_names or 'SymbioteCFF' in stage_names,
                  f"stages={stage_names}")
         except Exception as e:
             test("insane + @vm: не падает", False, str(e)[:120])
