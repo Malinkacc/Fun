@@ -194,6 +194,20 @@ def fold_constants(toks):
     return out, folds
 
 
+def fold_render(text):
+    """Fold constant arithmetic in `text` and return the rendered text."""
+    toks = tokenize(text)
+    toks, _ = fold_constants(toks)
+    out = []
+    last = 0
+    for t in toks:
+        out.append(text[last:t[2]])
+        out.append(str(t[1]) if t[0] == 'num' else text[t[2]:t[3]])
+        last = t[3]
+    out.append(text[last:])
+    return ''.join(out)
+
+
 # --------------------------------------------------------------------------- #
 # 3. structural parser (statements + expressions)
 # --------------------------------------------------------------------------- #
@@ -641,7 +655,7 @@ def walk_tree(p, bounds, path, folded, leaves, stats):
             pred.append(p.take())
         p.expect('kw', 'then')
         var, op, const = _pred_parts(pred)
-        pred_txt = folded[pred[0][2]:pred[-1][3]]
+        pred_txt = fold_render(folded[pred[0][2]:pred[-1][3]])
         _walk_block(p, _narrow(cur_bounds, var, op, const, True),
                     cur_path + [(pred_txt, 'Y')], folded, leaves, stats)
         t = p.peek()
@@ -702,7 +716,7 @@ def _record_leaf(body, bounds, path, folded, leaves, stats, start_pos, end_pos=N
         else:
             val = ('kw', 'nil', trans[3], trans[3])  # extra target -> nil
         kind, targets, note = _classify_value(val)
-        rhs = folded[_s(val):_e(val)][:80]
+        rhs = fold_render(folded[_s(val):_e(val)])[:80]
     elif body and body[-1][0] == 'return':
         kind = 'ret'
     elif body:
@@ -798,7 +812,7 @@ def analyze_source(src):
         p.parse_statement()
     leaves = []
     stats = {'kinds': {}}
-    walk_tree(p, (None, None), [], folded_text, leaves, stats)
+    walk_tree(p, (None, None), [], src, leaves, stats)
     trailing = p.parse_block({'end'})
     if p.at('kw', 'end'):
         p.take()

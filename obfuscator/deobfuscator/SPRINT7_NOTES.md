@@ -479,6 +479,39 @@ opmap STEP 28 added.  Output: `wd_names.json` (m_table, slot map, magic
 keys, stats) -- together with `wd_dispatch.json` the base for the
 block-level decompiler (2c-3).
 
+## WeAreDevs block-level lift (slice 2c-3, `wearedevs/block_lift.py`)
+
+Renders every dispatch-tree leaf as readable pseudo-Lua -- a BLOCK-LEVEL
+DECOMPILATION of the whole flattened program:
+
+* every `m(<magic int>)` call site becomes the decoded name literal
+  (8231 names from slice 2c-2); constant arithmetic is folded; assignments,
+  multi-assigns, calls, index chains, table constructors render
+  structurally; unresolved m() stays verbatim (no guessing);
+* each block header: leaf id, state range, kind, state target(s), the
+  resolved successor leaf(s) and the full predicate path from the tree
+  root (e.g. `--[L2829 | states 4633616..4637399 | straight ->
+  13048532 (L1601)]` + `-- path: (Q>8132948)N ... (Q<4637400)Y`);
+* `wd_blocks.lua` (all 3362 blocks) + `wd_cfg.json` (leaf -> state
+  targets -> successor leaves = the program CFG); `--leaf N` prints one
+  block; `rt_names.build_final_array` factored out and reused.
+
+Real sample: leaves=3362 ; rendered=3362 (100%) ; m-subs=10391 ;
+names=8231.  The program READS: entry block creates a closure named
+"hYw2ScQoIE2gA" (`W[K] = Q` name-store init), blocks load API names into
+`W[S[k]]` (e.g. `Q, l = h, "WaitForChild"` -> `W[S[1]] = Q`),
+`InvokeServer`/`Colorpicker`/`BuildConfigSection` appear as literals at
+their call sites.
+
+Cosmetic fix shipped: dispatch_map leaf `rhs`/pred `path` texts were cut
+from folded text with absolute offsets (mixed coordinate systems) -- now
+sliced from the raw source and re-folded (`fold_render`), so
+`wd_dispatch.json` texts are honest (tree numbers unchanged).
+
+`block_lift --test` is 6/6 (fold_render; m() substitution; index/call
+chain; multi-assign; table constructor; m() miss kept verbatim).
+opmap STEP 29 added.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -489,7 +522,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-28 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-29 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -497,4 +530,4 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
-(27), wearedevs rt_names (28).
+(27), wearedevs rt_names (28), wearedevs block_lift (29).

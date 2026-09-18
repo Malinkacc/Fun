@@ -76,6 +76,18 @@ def rotate01(arr, passes=None):
     return out
 
 
+def build_final_array(src):
+    """raw -> rotate01 -> decode -> list of str (the array as the VM sees it)."""
+    from obfuscator.deobfuscator.wearedevs.array_mirror import (
+        extract_arrays, decode_array)
+    b64, a85, raw = extract_arrays(src)
+    if not raw:
+        raise ValueError('string array not found')
+    rotated = rotate01(raw)
+    return [d.decode('latin1') if isinstance(d, bytes) else d
+            for d in decode_array(rotated, b64, a85)]
+
+
 def name_of(arr, n):
     """m(n): magic int -> string (arr = FINAL decrypted array, 0-based)."""
     idx = n + DECODER_OFFSET - 1
@@ -105,14 +117,7 @@ def collect_magic_ints(region_text):
 
 def analyze(src):
     """Full static resolution for one sample.  Returns info dict."""
-    from obfuscator.deobfuscator.wearedevs.array_mirror import (
-        extract_arrays, decode_array)
-    b64, a85, raw = extract_arrays(src)
-    if not raw:
-        raise ValueError('string array not found')
-    rotated = rotate01(raw)
-    final = [d.decode('latin1') if isinstance(d, bytes) else d
-             for d in decode_array(rotated, b64, a85)]
+    final = build_final_array(src)
 
     info = analyze_source(src)
     fpos, tail = info['region']
