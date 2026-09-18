@@ -1,11 +1,10 @@
 """
-NZL Studio Obfuscator — VM-Based (No loadstring, Roblox Executor Compatible)
+NZL Studio Obfuscator — Full Encryption (Roblox Executor Compatible)
 
-Style: Heavily obfuscated VM + large base85 bytecode blob
-- No loadstring (works in all Roblox executors)
-- Bytecode encoded as base85 blob
-- VM runtime heavily obfuscated
-- One continuous line
+Everything encrypted with RC4 → encoded as base85 → massive blob.
+Tiny bootstrap decodes + decrypts + loadstring.
+No visible string tables, no visible VM runtime.
+Works in Roblox executors (Synapse, Krnl, Script-Ware, etc.)
 """
 
 from __future__ import annotations
@@ -13,45 +12,78 @@ from __future__ import annotations
 import random
 import sys
 import os
-import re
 import struct
-from typing import Dict, List
+import hashlib
+from typing import List
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
     sys.path.insert(0, _root)
 
 
-# Base85 alphabet
-_B85 = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+# ═══════════════════════════════════════════════════════════════════════
+# BASE85 ENCODER
+# ═══════════════════════════════════════════════════════════════════════
+
+_B85 = (
+    "!\"#$%&'()*+,-./0123456789:;<=>?@"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`"
+    "abcdefghijklmnopqrstuvwxyz{|}~"
+)
 
 
-def _encode_base85(data: bytes) -> str:
-    """Encode bytes to base85 string (little-endian)."""
-    result = []
-    padding = (4 - len(data) % 4) % 4
-    data = data + b'\x00' * padding
+def _b85_encode(data: bytes) -> str:
+    """Encode bytes → base85 string (little-endian, always 5 chars per 4 bytes)."""
+    out: List[str] = []
+    pad = (4 - len(data) % 4) % 4
+    data += b'\x00' * pad
     for i in range(0, len(data), 4):
-        chunk = struct.unpack('<I', data[i:i+4])[0]
-        if chunk == 0:
-            result.append('z')
-        else:
-            chars = []
-            for _ in range(5):
-                chars.append(_B85[chunk % 85])
-                chunk //= 85
-            result.append(''.join(reversed(chars)))
-    if padding:
-        last = result[-1]
-        if last == 'z':
-            result[-1] = '!!!!!'
-            padding = 0
-        result[-1] = result[-1][:5-padding]
-    return ''.join(result)
+        n = struct.unpack('<I', data[i:i+4])[0]
+        c = []
+        for _ in range(5):
+            c.append(_B85[n % 85])
+            n //= 85
+        out.append(''.join(reversed(c)))
+    return ''.join(out)
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# RC4 ENCRYPTION (Python side)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _rc4(data: bytes, key: bytes) -> bytes:
+    """RC4 encrypt/decrypt."""
+    S = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + S[i] + key[i % len(key)]) % 256
+        S[i], S[j] = S[j], S[i]
+    
+    out = bytearray(len(data))
+    i = j = 0
+    for k in range(len(data)):
+        i = (i + 1) % 256
+        j = (j + S[i]) % 256
+        S[i], S[j] = S[j], S[i]
+        out[k] = data[k] ^ S[(S[i] + S[j]) % 256]
+    return bytes(out)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# MAIN OBFUSCATOR
+# ═══════════════════════════════════════════════════════════════════════
 
 def obfuscate(source: str) -> str:
-    """Obfuscate Lua source code - VM-based, no loadstring."""
+    """
+    Obfuscate Lua source → one massive base85 blob.
+    
+    Pipeline:
+    1. Compile source → VM bytecode
+    2. Generate VM runtime + wrapper (full working Lua code)
+    3. RC4-encrypt the entire output
+    4. Base85-encode the encrypted bytes
+    5. Wrap with tiny bootstrap (decode → decrypt → loadstring)
+    """
     from obfuscator.lexer import Lexer
     from obfuscator.parser import Parser
     from obfuscator.vm.compiler import compile_function
@@ -68,13 +100,20 @@ def obfuscate(source: str) -> str:
         seed = random.randint(1, 2**31)
         vm_output = generate_vm_code(proto, seed=seed)
         
-        # Heavy obfuscation + base85 bytecode blob
-        output = _obfuscate_with_blob(vm_output)
+        # Remove comments from VM output
+        clean_lines = []
+        for line in vm_output.split('\n'):
+            if '--' in line:
+                line = line[:line.index('--')]
+            clean_lines.append(line.rstrip())
+        vm_clean = '\n'.join(clean_lines).strip()
         
-        return output
+        return _build_encrypted_blob(vm_clean)
         
     except Exception as e:
-        return f'-- Obfuscation failed: {e}\n{source}'
+        import traceback
+        traceback.print_exc()
+        return f'-- Error: {e}\n{source}'
 
 
 def obfuscate_script(source: str, seed: int = None) -> str:
@@ -83,139 +122,129 @@ def obfuscate_script(source: str, seed: int = None) -> str:
     return obfuscate(source)
 
 
-def _obfuscate_with_blob(vm_output: str) -> str:
+# ═══════════════════════════════════════════════════════════════════════
+# BUILD ENCRYPTED OUTPUT
+# ═══════════════════════════════════════════════════════════════════════
+
+def _build_encrypted_blob(vm_code: str) -> str:
     """
-    Heavily obfuscate VM runtime and encode bytecode as base85 blob.
+    Build the final output:
+    - RC4 encrypt the VM code
+    - Base85 encode
+    - Add padding
+    - Wrap with tiny bootstrap
     """
-    # Step 1: Remove comments
-    lines = []
-    for line in vm_output.split('\n'):
-        if '--' in line:
-            line = line[:line.index('--')]
-        lines.append(line.strip())
-    code = ' '.join(line for line in lines if line)
+    # Generate random RC4 key (16-32 bytes)
+    key_len = random.randint(16, 32)
+    key_bytes = bytes(random.randint(1, 254) for _ in range(key_len))
     
-    # Step 2: Add a large base85 blob as decoy data (makes output look like user's example)
-    # This blob is stored in a variable that's never actually used
-    decoy_size = random.randint(8000, 12000)
-    decoy_bytes = bytes(random.randint(0, 255) for _ in range(decoy_size))
-    decoy_b85 = _encode_base85(decoy_bytes)
+    # RC4 encrypt the VM code
+    vm_bytes = vm_code.encode('utf-8')
+    encrypted = _rc4(vm_bytes, key_bytes)
     
-    # Generate random variable name for the decoy
-    decoy_var = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=2))
-    decoy_line = f'local {decoy_var}=[==[{decoy_b85}]==] '
+    # Base85 encode the encrypted data
+    b85_blob = _b85_encode(encrypted)
     
-    # Step 3: Encrypt all string literals
-    str_pattern = r'"((?:\\.|[^"\\])*)"'
-    all_strings = re.findall(str_pattern, code)
-    unique_strings = list(dict.fromkeys(all_strings))
+    # Add padding to make blob larger (match commercial obfuscator output size)
+    target = max(len(b85_blob), 12000)
+    if len(b85_blob) < target:
+        # Pad with random base85 chars BEFORE encoding (add to encrypted data)
+        extra_bytes = bytes(random.randint(0, 255) for _ in range((target - len(b85_blob)) * 4 // 5 + 100))
+        encrypted_padded = encrypted + extra_bytes
+        b85_blob = _b85_encode(encrypted_padded)
     
-    xor_key = random.randint(1, 254)
+    # Build the key as Lua byte sequence
+    key_lua = ','.join(str(b) for b in key_bytes)
     
-    def decode_lua_escapes(s: str) -> bytes:
-        result = []
-        i = 0
-        while i < len(s):
-            if s[i] == '\\' and i + 1 < len(s):
-                if s[i+1].isdigit():
-                    num_str = ''
-                    j = i + 1
-                    while j < len(s) and j < i + 4 and s[j].isdigit():
-                        num_str += s[j]
-                        j += 1
-                    if num_str:
-                        result.append(int(num_str) ^ xor_key)
-                        i = j
-                        continue
-                else:
-                    esc_map = {'n': 10, 't': 9, 'r': 13, '0': 0, '\\': 92, '"': 34, "'": 39}
-                    result.append(esc_map.get(s[i+1], ord(s[i+1])) ^ xor_key)
-                    i += 2
-                    continue
-            result.append(ord(s[i]) ^ xor_key)
-            i += 1
-        return bytes(result)
+    # Build bootstrap
+    # Variable names: single letters
+    bootstrap = _build_bootstrap(b85_blob, key_lua, len(vm_bytes))
     
-    str_table_entries = []
-    for s in unique_strings:
-        encrypted = decode_lua_escapes(s)
-        byte_seq = ','.join(str(b) for b in encrypted)
-        str_table_entries.append(f'string.char({byte_seq})')
+    return bootstrap
+
+
+def _build_bootstrap(b85_blob: str, key_lua: str, orig_len: int) -> str:
+    """
+    Build the tiny bootstrap that:
+    1. Decodes base85 → encrypted bytes
+    2. RC4 decrypts → original VM code
+    3. Uses loadstring to execute
     
-    st_var = 'Q'
-    dec_var = 'R'
+    All variable names are single letters.
+    loadstring is accessed directly (works in executors).
+    """
+    # The bootstrap is a self-contained Lua script
+    # It decodes the base85 blob, RC4 decrypts it, and executes via loadstring
     
-    str_table_code = f'local {st_var}={{'
-    for i, entry in enumerate(str_table_entries):
-        str_table_code += entry
-        if i < len(str_table_entries) - 1:
-            str_table_code += ','
-    str_table_code += '}'
+    parts = []
     
-    decrypt_code = f'local {dec_var}=function(n)local s={st_var}[n]local r={{}}for i=1,#s do r[i]=string.char(bit32.bxor(string.byte(s,i),{xor_key}))end return table.concat(r)end'
+    # RC4 decrypt function + base85 decoder + loadstring call
+    # All in one compact script with single-letter vars
     
-    str_to_idx = {s: i+1 for i, s in enumerate(unique_strings)}
+    # Variable assignments
+    parts.append('local a,b,c,d,e,f,g,h,i,j,k={},{},{},{},{},{},{},{},{},{},{}')
     
-    def replace_string(match):
-        s = match.group(1)
-        idx = str_to_idx.get(s)
-        if idx is not None:
-            return f'{dec_var}({idx})'
-        return match.group(0)
+    # Base85 decode function (simplified: all chunks are exactly 5 chars)
+    parts.append(
+        'local function l(m)'
+        'local n=""'
+        'for o=1,#m,5 do '
+        'local q=m:sub(o,o+4)'
+        'local r=0 '
+        'for p=1,5 do r=r*85+(q:byte(p)-33) end '
+        'for p=1,4 do n=n..string.char(r%256) r=math.floor(r/256) end '
+        'end '
+        'return n '
+        'end'
+    )
     
-    code = re.sub(str_pattern, replace_string, code)
-    code = decoy_line + str_table_code + ' ' + decrypt_code + ' ' + code
+    # RC4 decrypt function
+    parts.append(
+        'local function t(u,v)'
+        'local w={}'
+        'for x=0,255 do w[x]=x end '
+        'local y=0 '
+        'for x=0,255 do '
+        'y=(y+w[x]+v:byte(x%#v+1))%256 '
+        'w[x],w[y]=w[y],w[x] '
+        'end '
+        'local z="" '
+        'local x2,y2=0,0 '
+        'for x=1,#u do '
+        'x2=(x2+1)%256 '
+        'y2=(y2+w[x2])%256 '
+        'w[x2],w[y2]=w[y2],w[x2] '
+        'local aa=w[(w[x2]+w[y2])%256] '
+        'z=z..string.char(bit32.bxor(u:byte(x),aa)) '
+        'end '
+        'return z '
+        'end'
+    )
     
-    # Step 4: Rename variables
-    reserved = {
-        'function', 'local', 'return', 'end', 'then', 'else', 'elseif',
-        'while', 'repeat', 'until', 'for', 'if', 'do', 'string', 'table',
-        'math', 'bit32', 'error', 'print', 'tostring', 'tonumber', 'type',
-        'pcall', 'xpcall', 'select', 'unpack', 'pairs', 'ipairs', 'next',
-        'getmetatable', 'setmetatable', 'rawget', 'rawset', 'coroutine',
-        'nil', 'true', 'false', 'and', 'or', 'not', 'break', 'in',
-        'concat', 'insert', 'remove', 'byte', 'char', 'sub', 'floor',
-        'huge', 'bxor', 'band', 'bor', 'bnot', 'getfenv', '_G',
-        'assert', 'setfenv', 'require'
-    }
+    # Decode base85 blob
+    parts.append(f'local bb=l([==[{b85_blob}]==])')
     
-    id_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
-    all_ids = set(re.findall(id_pattern, code))
-    user_vars = sorted([v for v in all_ids if v not in reserved], key=len, reverse=True)
+    # RC4 key
+    parts.append(f'local cc=string.char({key_lua})')
     
-    letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    var_map = {}
-    for i, var in enumerate(user_vars):
-        if i < len(letters):
-            var_map[var] = letters[i]
-        else:
-            var_map[var] = letters[i % len(letters)] + str(i // len(letters))
+    # Decrypt
+    parts.append(f'local dd=t(bb:sub(1,{orig_len}),cc)')
     
-    for old, new in var_map.items():
-        code = re.sub(rf'\b{re.escape(old)}\b', new, code)
+    # Execute via loadstring (try multiple methods for executor compatibility)
+    parts.append(
+        'local ee=loadstring or load '
+        'if ee then ee(dd)() '
+        'else '
+        'local ff=getfenv and getfenv() or _G '
+        'local gg=ff["\\108\\111\\97\\100\\115\\116\\114\\105\\110\\103"] '
+        'if gg then gg(dd)() end '
+        'end'
+    )
     
-    # Step 5: Add junk code
-    junk_parts = []
-    for _ in range(10):
-        jv = ''.join(random.choices('abcdefghij', k=2))
-        jn = random.randint(1000, 9999)
-        junk_parts.append(f'local {jv}={jn}+{random.randint(1,999)}')
-    junk = ' '.join(junk_parts)
-    code = junk + ' ' + code
+    # Join everything
+    result = ' '.join(parts)
     
-    # Step 6: Minify
-    code = re.sub(r'\s+', ' ', code)
-    code = re.sub(r'\s*([=+\-*/<>~#.,;:{}()\[\]])\s*', r'\1', code)
+    # Minify: remove unnecessary spaces
+    result = result.replace('  ', ' ')
     
-    keywords = ['local', 'function', 'end', 'then', 'else', 'elseif', 'do',
-                'for', 'if', 'while', 'repeat', 'until', 'return', 'in',
-                'or', 'and', 'not', 'break', 'true', 'false', 'nil']
-    for kw in keywords:
-        code = re.sub(rf'\b{kw}\b(?=[a-zA-Z0-9_])', f'{kw} ', code)
-        code = re.sub(rf'(?<=[a-zA-Z0-9_\)])\b{kw}\b', f' {kw}', code)
-    
-    code = re.sub(r'  +', ' ', code)
-    code = code.strip()
-    code = code.replace('\n', '').replace('\r', '')
-    
-    return code
+    return result
