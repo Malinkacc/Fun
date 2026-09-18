@@ -57,15 +57,30 @@ def obfuscate_script(source: str, seed: int = None) -> str:
 def _post_process(vm_output: str) -> str:
     """Simple post-processing: remove comments, rename vars, minify."""
     
-    # Step 1: Remove comments
+    # Step 1: Remove comments (but not inside strings)
     lines = []
     for line in vm_output.split('\n'):
-        if '--' in line:
-            line = line[:line.index('--')]
+        # Simple comment removal: only if -- is not inside quotes
+        in_single = False
+        in_double = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if ch == '\\' and i + 1 < len(line):
+                i += 2  # Skip escaped character
+                continue
+            if ch == '"' and not in_single:
+                in_double = not in_double
+            elif ch == "'" and not in_double:
+                in_single = not in_single
+            elif ch == '-' and i + 1 < len(line) and line[i+1] == '-' and not in_single and not in_double:
+                line = line[:i]
+                break
+            i += 1
         lines.append(line.strip())
     code = ' '.join(line for line in lines if line)
     
-    # Step 2: Rename variables
+    # Step 2: Rename variables (but NOT inside strings)
     reserved = {
         'function', 'local', 'return', 'end', 'then', 'else', 'elseif',
         'while', 'repeat', 'until', 'for', 'if', 'do', 'string', 'table',
@@ -79,9 +94,19 @@ def _post_process(vm_output: str) -> str:
         'require', 'protectedFn', 'lrotate', 'rrotate'
     }
     
+    # Extract strings first (to avoid renaming inside them)
+    strings = []
+    def replace_string(match):
+        strings.append(match.group(0))
+        return f'__STR_{len(strings)-1}__'
+    
+    # Match both single and double quoted strings (with escapes)
+    code = re.sub(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'', replace_string, code)
+    
+    # Now rename variables in code without strings
     id_pattern = r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b'
     all_ids = set(re.findall(id_pattern, code))
-    user_vars = sorted([v for v in all_ids if v not in reserved], key=len, reverse=True)
+    user_vars = sorted([v for v in all_ids if v not in reserved and not v.startswith('__STR_')], key=len, reverse=True)
     
     letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
     var_map = {}
@@ -93,6 +118,10 @@ def _post_process(vm_output: str) -> str:
     
     for old, new in var_map.items():
         code = re.sub(rf'\b{re.escape(old)}\b', new, code)
+    
+    # Restore strings
+    for i, s in enumerate(strings):
+        code = code.replace(f'__STR_{i}__', s)
     
     # Step 3: Minify
     code = re.sub(r'\s+', ' ', code)

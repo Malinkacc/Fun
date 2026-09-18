@@ -170,6 +170,9 @@ class RuntimeGenerator:
         lines.append(f'local {n.bxor} = bit32.bxor')
 
         lines.append('')
+        lines.append(self._gen_rc4_decrypt())
+        
+        lines.append('')
         lines.append(self._gen_key_builder())
         
         lines.append('')
