@@ -230,8 +230,35 @@ def main():
     ratio = len(result) / float(len(src))
     chk('T10 size ratio %.1fx (< 400x)' % ratio, ratio < 400.0)
 
+    # T11: comments in output = only watermark branding (invisible
+    # zero-width signatures + the discord header); no readable junk
+    import re as _re
+    bad = []
+    for ln in result.split('\n'):
+        if not ln.lstrip().startswith('--'):
+            continue
+        visible = _re.sub(r'[^\x20-\x7E]', '', ln.lstrip('-').strip('[]'))
+        if (visible and 'discord.gg' not in visible
+                and 'NZL Studio' not in visible
+                and not visible.strip().startswith('NZL:')):
+            bad.append(visible[:60])
+    chk('T11 comments = branding only, got %d readable' % len(bad),
+        not bad, repr(bad))
+
+    # T12: no readable runtime junk / section markers leak
+    leaks = [t for t in ('_nzl_read_', '_junk_', '_nzl_nop', '_nzl_checksum',
+                         '_nzl_close', '_captured_R', '_parent_upvals',
+                         '_child_upvals', '[env]', '[at]', '[vm_protection]',
+                         'NZL VM Runtime (build', 'VM-protected function')
+             if t in result]
+    chk('T12 no readable runtime leaks', not leaks, repr(leaks))
+
+    # T13: the VM runtime is emitted ONCE per file (not per function)
+    rt_marks = result.count('table.unpack or unpack')
+    chk('T13 VM runtime shared: %d copy' % rt_marks, rt_marks == 1)
+
     print('')
-    total = 11
+    total = 14
     print('Result: %d/%d' % (total - len(_FAILS), total))
     if _FAILS:
         print('[XX] FAILURES: %d' % len(_FAILS))

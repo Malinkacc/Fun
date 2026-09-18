@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import re
 from typing import Any, Dict, List, Optional
 
 from .opcodes import (
@@ -95,6 +96,8 @@ class RuntimeGenerator:
 
         self.shuffle_dispatch = shuffle_dispatch
         self.add_junk_ops = add_junk_ops
+        self._runtime_src: Optional[str] = None
+        self._runtime_emitted = False
 
     def generate_vm_wrapper(
         self,
@@ -106,16 +109,39 @@ class RuntimeGenerator:
         bc_lit = self.serializer.serialize_proto(proto, key)
         key_lit = self.serializer.serialize_key(key)
 
-        runtime_code = self._generate_runtime()
         wrapper = self._generate_wrapper(fn_name, bc_lit, key_lit)
 
-        return runtime_code + '\n\n' + wrapper
+        # Shared runtime: emitted ONCE per generator instance; every
+        # further wrapper just calls the already-defined create_vm.
+        if not self._runtime_emitted:
+            self._runtime_src = self._strip_readable(self._generate_runtime())
+            self._runtime_emitted = True
+            return self._runtime_src + '\n\n' + wrapper
+        return wrapper
+
+    # Readable leftovers from the code templates (they were identical
+    # across every build -> fingerprinting + eye-soar). Renamed per build.
+    _READABLE_RE = re.compile(
+        r'\b(_nzl_read_u32|_nzl_read_i32|_nzl_read_double|_rets|_args|_uv|'
+        r'_step|_cont|_pref|_need|_fn|_captured_R|_parent_upvals|'
+        r'_child_upvals|_uvi|_uvm|_slot|_nzl_nop|_nzl_checksum|'
+        r'_nzl_close|_junk_\d+|b4|b5|b6|b7|sign|exp|mant|val|instr)\b')
+
+    def _strip_readable(self, src: str) -> str:
+        mapping: Dict[str, str] = {}
+
+        def _repl(m: 're.Match') -> str:
+            tok = m.group(0)
+            if tok not in mapping:
+                mapping[tok] = self.name_gen.generate()
+            return mapping[tok]
+
+        return self._READABLE_RE.sub(_repl, src)
 
     def _generate_runtime(self) -> str:
         n = self.names
         lines: List[str] = []
 
-        lines.append(f'-- NZL VM Runtime (build {self.seed:08x})')
         lines.append(f'local {n.str_byte} = string.byte')
         lines.append(f'local {n.str_sub} = string.sub')
         lines.append(f'local {n.str_char} = string.char')
@@ -695,8 +721,7 @@ end'''
 
     def _generate_wrapper(self, fn_name: str, bytecode_lit: str, key_lit: str) -> str:
         n = self.names
-        return f'''-- VM-protected function
-local {fn_name} = {n.create_vm}(
+        return f'''local {fn_name} = {n.create_vm}(
     {bytecode_lit},
     {key_lit}
 )'''

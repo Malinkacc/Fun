@@ -276,6 +276,7 @@ def _compile_function_to_vm(
     rng: random.Random,
     scope_locals: Optional[Set[str]] = None,
     mutated_names: Optional[Set[str]] = None,
+    rt_gen: 'RuntimeGenerator | None' = None,
 ) -> Tuple[Optional[str], str, List[str]]:
     scope_locals = set(scope_locals or ())
     mutated_names = set(mutated_names or ())
@@ -318,8 +319,8 @@ def _compile_function_to_vm(
             if proto is None:
                 return None, err, []
 
-        rt_gen = RuntimeGenerator(seed=rng.randint(0, 0xFFFFFFFF))
-        vm_code = rt_gen.generate_vm_wrapper(proto, fn_name=factory_lua_name)
+        gen = rt_gen or RuntimeGenerator(seed=rng.randint(0, 0xFFFFFFFF))
+        vm_code = gen.generate_vm_wrapper(proto, fn_name=factory_lua_name)
 
         return vm_code, '', captures
 
@@ -348,6 +349,9 @@ class VMProtectionTransformer:
         self.seed = seed
         self.rng = make_rng(seed)
         self._name_gen = NameGenerator(rng=self.rng, style='hex')
+        # ONE runtime generator for the whole file -> the VM runtime is
+        # emitted once, not per protected function.
+        self._rt_gen = RuntimeGenerator(seed=self.rng.randint(0, 0xFFFFFFFF))
         self._counter = 0
         self._stats = {
             'functions_protected': 0,
@@ -476,6 +480,7 @@ class VMProtectionTransformer:
             rng=self.rng,
             scope_locals=scope_locals,
             mutated_names=mutated_names,
+            rt_gen=self._rt_gen,
         )
 
         if factory_code is None:

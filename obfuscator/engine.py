@@ -431,6 +431,12 @@ class Obfuscator:
     # PROTECTION LAYER
     # ═══════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _strip_comment_lines(text: str) -> str:
+        kept = [ln for ln in text.split('\n')
+                if not ln.lstrip().startswith('--')]
+        return '\n'.join(kept)
+
     def _build_protection_layer(self, config: dict) -> str:
         parts = []
 
@@ -438,8 +444,7 @@ class Obfuscator:
             try:
                 env_code = generate_environment_checks(self.seed)
                 if env_code:
-                    parts.append("-- [env]")
-                    parts.append(env_code)
+                    parts.append(self._strip_comment_lines(env_code))
             except Exception as e:
                 self._log(f"⚠️  environment_checks: {e}")
 
@@ -447,8 +452,7 @@ class Obfuscator:
             try:
                 tamper_code = generate_anti_tamper(self.seed)
                 if tamper_code:
-                    parts.append("-- [at]")
-                    parts.append(tamper_code)
+                    parts.append(self._strip_comment_lines(tamper_code))
             except Exception as e:
                 self._log(f"⚠️  anti_tamper: {e}")
 
@@ -460,9 +464,8 @@ class Obfuscator:
         if protection:
             parts.append(protection)
 
-        for name, prelude_code in self._extra_prelude:
-            parts.append(f"-- [{name}]")
-            parts.append(prelude_code)
+        for _name, prelude_code in self._extra_prelude:
+            parts.append(self._strip_comment_lines(prelude_code))
 
         parts.append(code)
         parts.append(f"-- {DISCORD_LINK}")

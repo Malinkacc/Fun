@@ -190,10 +190,6 @@ class WatermarkGenerator:
         zw = encode_zw(f"{self.owner_id}:{self.build_id}")
         marks.append(f"--{zw}")
 
-        # 3. Закодированный fingerprint в hex-комментарии
-        fp_bytes = self._wm_hash.encode()
-        hex_fp = ''.join(f'\\{b}' for b in fp_bytes)
-        marks.append(f"-- \"{hex_fp}\"")
 
         # 4. Discord ссылка
         marks.append(f"-- Protected by {OBFUSCATOR_NAME} | {DISCORD_LINK}")
@@ -227,8 +223,6 @@ class WatermarkGenerator:
         trap_lines = [
             f"--{zw}",
             f"-- {OBFUSCATOR_NAME} | {DISCORD_LINK}",
-            f"-- Tampering detected → infinite loop",
-            f"-- while true do end",  # Trap в комментарии (не выполняется)
         ]
         return '\n'.join(trap_lines)
 
