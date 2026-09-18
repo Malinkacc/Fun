@@ -40,8 +40,20 @@ except Exception as _e:
     print(f"[bot] ⚠️ Ошибка прогрева: {_e}")
 
 # ── Константы ──────────────────────────────────────────────────────────────────
-TOKEN = "MTEwMTkyNTQwNzUyNTE4MzY3Mg.GXTSzE.5MTlGmMbZ79iNvZqMfgx1vIfG9nd-F2bv0DS1Q"
+import json as _json
+_secret_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_secret.json")
+TOKEN = ""
 GUILD_ID = 1123677106799394888
+if os.path.exists(_secret_path):
+    with open(_secret_path, "r", encoding="utf-8-sig") as _f:
+        _sec = _json.load(_f)
+    TOKEN = _sec.get("token", "")
+    GUILD_ID = int(_sec.get("guild_id", GUILD_ID))
+if not TOKEN:
+    print("[bot] ОШИБКА: токен не найден!")
+    print(f"[bot] Создай файл: {_secret_path}")
+    print('[bot] Содержимое: {"token": "ТВОЙ_ТОКЕН", "guild_id": "1123677106799394888"}')
+    raise SystemExit(1)
 BOT_VERSION = "1.2"
 
 COLOR_OK = 0x00FF88
