@@ -178,6 +178,13 @@ $c24 = $LASTEXITCODE
 $o24 | Select-Object -Last 2
 if ($c24 -ne 0) { $fail = 1; Write-Host "[XX] msvm_decomp self-test FAILED"; $o24 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec msvm_decomp self-test passed" }
 
-Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines"
+Write-Host ""
+Write-Host "== STEP 25: moonsec decompile self-test (one-command decompiler chain, expect 6/6)"
+$o25 = py -m obfuscator.deobfuscator.moonsec.decompile --test 2>&1
+$c25 = $LASTEXITCODE
+$o25 | Select-Object -Last 2
+if ($c25 -ne 0) { $fail = 1; Write-Host "[XX] decompile self-test FAILED"; $o25 | Select-Object -Last 6 } else { Write-Host "[OK] moonsec decompile self-test passed" }
+
+Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6"
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail

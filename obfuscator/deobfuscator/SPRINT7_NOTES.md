@@ -354,6 +354,24 @@ are marked not interpreted; a few superinstr chain entries keep candidate
 ambiguity (rendered from the most-resolved variant); vararg-boundary forms
 (`RETURN_m`, multres calls) render with `...` markers.
 
+## MoonSec V3 one-command decompiler (slice 2b-11, `moonsec/decompile.py`)
+
+Single entry wiring the whole verified chain with no new RE logic:
+
+    py -m obfuscator.deobfuscator.moonsec.decompile --in obfuscated.lua --out deobf.lua --clean
+
+extract_blob -> find_seed -> decode_payload -> decode_full (>=90% consume
+guard) -> msvm_semantics (dispatch + alias executor) -> msvm_decomp
+(readable Lua) -> clean_lua (provenance comments stripped, code+labels
+kept).  The report line prints blob size, recovered seed, consume ratio,
+slot/macro/dead counts.  On the real sample: blob=13702, seed=252,
+6843/6843 (100.0%), 14 protos, 516 slots, 368 macros, 12 dead (2.3%).
+`msvm_decomp` gained `--clean` and `clean_lua`; `lua_lit` now renders
+live-path bytes constants as proper Lua strings / x'<hex>'.
+
+`--test` is 6/6 (clean_lua code/comment split; full chain on the in-repo
+real sample with honest skip if absent).  opmap STEP 25 added.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -364,10 +382,11 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-24 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-25 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
-msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24).
+msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
+moonsec decompile (25).

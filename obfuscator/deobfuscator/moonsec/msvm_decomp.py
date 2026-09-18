@@ -49,11 +49,19 @@ if _REPO_ROOT not in sys.path:
 # --------------------------------------------------------------------------- #
 
 def lua_lit(v):
-    """Const-substituted operand -> Lua literal."""
+    """Const-substituted operand -> Lua literal (bytes/str/dict forms)."""
     if isinstance(v, bool):
         return 'true' if v else 'false'
     if isinstance(v, (int, float)):
         return str(v)
+    if isinstance(v, bytes):
+        try:
+            s = v.decode('utf-8')
+        except UnicodeDecodeError:
+            return "x'%s'" % v.hex()
+        if all(32 <= ord(ch) < 127 or ch in '\n\t' for ch in s):
+            return '"%s"' % s.replace('\\', '\\\\').replace('"', '\\"')
+        return "x'%s'" % v.hex()
     if isinstance(v, str):
         return '"%s"' % v.replace('\\', '\\\\').replace('"', '\\"')
     if isinstance(v, dict) and '__bytes__' in v:
@@ -293,6 +301,20 @@ def lift_proto(proto, opinfo, proto_path='0'):
     return lines, stats
 
 
+def clean_lua(text):
+    """Strip provenance comments (--[[...]]) from lifted Lua; keeps
+    statements and labels, drops lines that become empty."""
+    out = []
+    for line in text.split('\n'):
+        s = re.sub(r'\s*--\[\[.*?\]\]\s*$', '', line)
+        if s.strip() == '' and '--[[' in line:
+            continue  # pure comment line (dead slot marker etc.)
+        if s.strip() == '' and line.strip() == '':
+            continue
+        out.append(s)
+    return '\n'.join(out)
+
+
 def lift_tree(root, opinfo):
     """Lift a proto tree; returns (text, stats_list)."""
     out = []
@@ -430,6 +452,10 @@ def _selftest():
     chk('T5 chain GETTABLE', "r9 = r9[\"char\"]" in t5, t5)
     chk('T5 consumed 7 slots', st5['macros'] == 1 and st5['slots'] == 7, st5)
 
+    chk('T5b clean_lua strips provenance',
+        '[[' not in clean_lua('  r1 = 2  --[[#5.1 op=25]]\n--[[dead slot #6]]\nL7:'),
+        'clean output must keep code+labels only')
+
     # T6: dead slot marking for broken control field
     proto6 = {'nparams': 0, 'consts': [], 'instrs': [
         [20, 6, 'getfenv', None],
@@ -460,6 +486,8 @@ def main(argv=None):
     ap.add_argument('--protos', default=None)
     ap.add_argument('--outdir', default='out')
     ap.add_argument('--maxlines', type=int, default=80)
+    ap.add_argument('--clean', action='store_true',
+                    help='strip provenance comments from the output')
     a = ap.parse_args(argv)
     if a.test:
         return _selftest()
@@ -472,6 +500,8 @@ def main(argv=None):
     opinfo = {str(k): v for k, v in sem['ops'].items()}
     protos = json.load(open(a.protos, encoding='utf-8'))
     text, stats = lift_tree(protos[0], opinfo)
+    if a.clean:
+        text = clean_lua(text)
     os.makedirs(a.outdir, exist_ok=True)
     p = os.path.join(a.outdir, 'msvm_decompiled.lua')
     with open(p, 'w', encoding='utf-8') as fh:
