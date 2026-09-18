@@ -212,6 +212,166 @@ STEP 21 added.
 * Next (2b-9): opcode mnemonic mapping (shapes + VM dispatch handler bodies ->
   Lua 5.1 names), then upgrade the lifter from pseudo-Lua to real statements.
 
+## MoonSec V3 dispatch extractor (slice 2b-9 part 1, `moonsec/msvm_dispatch.py`)
+
+Static extraction of per-opcode HANDLER BODIES from the obfuscated interpreter
+(`function ne(...)` @183337, ~53 KB), no sandbox:
+
+* stage2 numeric constants (51) re-decoded from payload1 (seed 107) resolve
+  every `h.Name` guard of the dispatch tree.
+* Lua tokenizer + block parser build the guard tree of
+  `while le do ... e=t[n];f=e[g]; if ... end ... n=1+n end`; a sequential
+  walker threads the candidate opcode set through the guards, so
+  `repeat if f~=K then BODY;break;end FALL until true` wrappers put BODY on
+  S\{K} and FALL on {K}; raw statements become (opset, span) segments.
+* DOMAIN PROOF: the tree covers opcodes 1..160 with EMPTY residual, and all
+  90 proto opcodes (1..153) are covered -- there is NO opcode remap between
+  fetch and dispatch.  vm_model.py's "~77..114" was an artifact of scanning
+  only the upper half of the tree (bounds 76/96/99/101/104/114 are real
+  guards, but of the f>76 subtree only).
+* Driver loop: handlers advance pc inline between fused sub-ops
+  (`n=n+1;e=t[n];`), shared tail `n=1+n` completes the last step; `if n<-40
+  then n=n+42 end` is the pc-wrap guard (gtWTPyqI=40, ROzjrxmk=42).
+* Register file `l` = factory mode 7 proxy:
+  `setmetatable({},{__call=function(e,c,d,l,n) if n then return e[n] elseif
+  l then return e else e[c]=d end end})` => `l(a,b)` is LOADIMM R[a]:=b;
+  `o`=globals, `m`=upvalues, `k`=constant array (op 8 = CLOSURE:
+  `l[e[d]]=_(k[e[c]],nil,m)`).
+* Op 24 = CLOSURE upvalue-descriptor pseudo-instruction: the CLOSURE handler
+  consumes `e[r]` following instructions (`if e[g]==24 then f[d-1]={l,e[c]}`
+  = stack upvalue), matching Lua 5.1 CLOSURE semantics; proto records with
+  opcode 24 are descriptors, not dispatchable ops.
+* 17 byte-identical duplicate-body groups ([8,111] CLOSURE, [44,47,60],
+  [101,128], [64,151], [105,145], [152,154..160] phantom-tail, ...).
+* Catalog: 191 segments; 76/160 ops (50/90 proto ops) already reduce to
+  canonical primitives (MOVE/LOADIMM/ADD../GET../SET../GET/SETGLOBAL/
+  GET/SETUPVAL/NEWTABLE/LOADBOOL/LOADNIL/LEN/TEST/EQ/JMP/CALL/RET/...).
+  The rest are state-machine-unrolled composites (e.g. op 5 = MOVE via a
+  7-state alias unroller; op 100 = CONCAT A B C; op 152 top-count) -- alias
+  executor next (2b-9 part 2), then the lifter upgrade (2b-10).
+
+`--test` is 6/6 (tokenizer, guard reduction incl. flips, tree walk pinning on
+a synthetic dispatcher, repeat-wrapper pair splitting, non-overlapping
+primitive matching, composite-isolation).  `--sample` writes
+`msvm_dispatch.json` (per-op segments/prims/unmatched + duplicates + coverage).
+
+* Next (2b-9 part 2): symbolic alias-unroller executor for the composite
+  handlers -> full per-op mnemonic table; then 2b-10 upgrades msvm_lift from
+  pseudo-Lua to real statements (register-vs-immediate resolved per-op).
+
+## MoonSec V3 opcode semantics (slice 2b-9 part 2, `moonsec/msvm_semantics.py`)
+
+The alias-executor half of 2b-9: per-opcode handler streams become canonical
+register-transfer effects and Lua 5.1 style mnemonics.  RESULT: **all 160
+dispatch opcodes resolve with zero unresolved markers**; the 90 opcodes used
+by the embedded program (516 instrs) map to:
+
+    JMP(x37) MOVE LOADK SETGLOBAL GETUPVAL FORLOOP FORPREP CLOSE_UV
+    RETURN_1/_m/_0 GETGLOBAL GETTABLE SETTABLE NEWTABLE LOADBOOL LOADNIL
+    TEST TESTN TESTSET EQ_C/EQ_K NE_C/NE_R CALL_0 CALLC VARARG SELF CONCAT
+    CLOSURE ADD/SUB/MUL/MOD/POW LEN NOP + SUPERINSTRUCTIONS (fused chains)
+
+Superinstruction examples: op 122 = LOADK x5 + GETTABLE; op 9 = 5x LOADIMM +
+CALL; op 18 = LOADBOOL+SETUPVAL+GETUPVAL+NEWTABLE x3; op 88/144 =
+MOVE+GETUPVAL+CALL(+SELF); op 119 = TAILCALL+RETURN_m+RETURN_0.  Top-count
+op 152 = JMP (x37) -- exactly what the 2b-7 operand profile predicted
+("A fixed, B/C absent -> jump-like").  Opcode 24 records are ALL CLOSURE
+upvalue descriptors (positional: `for d=1,e[r] do ... if e[g]==24 then
+f[d-1]={l,e[c]} else f[d-1]={o,e[c]} end` = stack vs env-bound upvalue);
+its dispatch body is MOVE-shaped but unused.
+
+Pipeline (all static): (1) context-aware op-walk over the guard tree --
+negative-constant guards (`if-4~=f`) and `h.NAME` guards parse as opcode
+splits; state-machine headers (`VAR=0; while VAR>-1 do`) become SM markers;
+(2) per-op SM expansion: conditions on the state var split the STATE set
+(states 0,1,2,... in order, `VAR=-2` terminates), other conditions are
+runtime choices and BOTH branches are kept (ALT); dummy for-selectors and
+`repeat if c then A break;end B` wrappers execute exactly one branch via the
+sequential walk; (3) symbolic alias executor resolves obfuscated temporaries
+(`f=e;r=d;o=c;s=l;h=s[f[o]];t=f[r];l[t]=h` -> R[A]:=R[B]) through a small
+expression parser into canonical operands (A/B/C fields, R[x], K[x], G[x],
+U[x], INSTR, pc); (4) effect classifier assigns mnemonics; `local n/e`
+declarations shadow pc/INSTR; step pairs (`n=n+1`,`e=t[n]`) are folded.
+
+Also refined `msvm_dispatch.parse_cond` with the same robust condition
+parser (unary-minus + h.NAME consts, 3..4 token forms): its real-sample
+catalog improved to 19 duplicate-body groups ([8,111] CLOSURE, [44,47,60],
+[20,97,99], [75,133], [101,128], [105,145], [152,154..160] phantom-tail,
+...); coverage proof unchanged (1..160, empty residual).
+
+`--test` is 6/6 (depth-aware statement split; synthetic 3-op dispatcher with
+plain/proxy/unrolled-MOVE handlers; alias resolution).  `--sample` writes
+`msvm_semantics.json` (per-op names/details/unresolved/alts).  opmap STEP 23
+added.
+
+* Next (2b-10): upgrade `msvm_lift` from pseudo-Lua to real statements using
+  this mnemonic table (skip CLOSURE descriptors positionally; decode
+  jumps/branches to labels; register-vs-immediate per mnemonic).
+
+## MoonSec V3 decompiler (slice 2b-10, `moonsec/msvm_decomp.py`)
+
+The chain-2b finale: the decoded proto tree lifts to READABLE LUA with real
+statements (the 2b-8 pseudo listing stays for raw reference).  Execution
+model proven on the real sample while building this:
+
+* Field map: instruction = [op, A, B, C]; VM fields e[g]/e[d]/e[c]/e[r] =
+  op/A/B/C.  EVERY control transfer uses **B** (`n=e[c]` + loop tail +1 ->
+  target slot B+1): JMP (152/28), TEST/TESTN/TESTSET, EQ/NE (C is the
+  compare operand, R or immediate), FORLOOP/FORPREP, EQ_K (59/96).
+  A TEST-like TRUE branch SKIPS the next slot -> the slot after a
+  conditional is dead padding (rendered as a comment).
+* EQ/NE direction: handlers are `if (A==C) then skip else goto` (and ~=
+  mirror), so the decompiler emits the goto under the NEGATED condition --
+  verified against the taunt leaf: `if r0 == "" then return
+  U["vzqmDbuPGFdLEJP"] end; return "Federal was here"`.
+* Superinstructions consume `1 + #refetch-pairs` slots (msvm_semantics
+  `consumed`); each chain element renders from its OWN slot's A/B/C
+  (e.g. op 25 = 3x GETGLOBAL + GETTABLE + tailcall/return chain over 7
+  slots).  CLOSURE-with-descriptors (112/123, handler
+  `for d=1,e[r] do n=n+1; local e=t[n]; if e[g]==24 ...`) consumes 1+C
+  slots; op 8/111 consume 1 (proto from constants).
+* Opcode 24 never dispatches (slot body `n=-2`); op-24 slots are
+  descriptors/fillers.  Anti-tamper regions contain intentionally DEAD
+  slots (TEST/JMP with non-integer targets, orphan op-24); all of them
+  are rendered as explicit `--[[dead ...]]` comments, nothing dropped.
+* Real sample: 516 slots -> 368 macros, 12 dead/unresolved (2.3%,
+  almost all in the root's anti-tamper block), output
+  `msvm_decompiled.lua` with labels/gotos, resolved constants, upvalue
+  NAMES (`r6 = U["getfenv"]`) and per-slot provenance comments.
+
+`--test` is 6/6 (statements with reg/literal operands; JMP/label/TEST-skip;
+table ops; descriptor consumption; superinstr per-slot rendering; dead-slot
+marking).  opmap STEP 24 added.  `msvm_semantics` now also emits per-slot
+`chain` entries as [name, detail] pairs plus `consumed`.
+
+## Chain 2b status (MoonSec V3 -> plaintext)
+
+COMPLETE end-to-end: payload mirror (2b-1..3) -> proto tree at seed 252
+(2b-5/2b-6, 100.0% consume) -> operand profiles (2b-7) -> pseudo listing
+(2b-8) -> dispatch extraction (2b-9p1) -> mnemonic table (2b-9p2) ->
+readable Lua decompiler (2b-10).  Remaining known limits: dead-slot regions
+are marked not interpreted; a few superinstr chain entries keep candidate
+ambiguity (rendered from the most-resolved variant); vararg-boundary forms
+(`RETURN_m`, multres calls) render with `...` markers.
+
+## MoonSec V3 one-command decompiler (slice 2b-11, `moonsec/decompile.py`)
+
+Single entry wiring the whole verified chain with no new RE logic:
+
+    py -m obfuscator.deobfuscator.moonsec.decompile --in obfuscated.lua --out deobf.lua --clean
+
+extract_blob -> find_seed -> decode_payload -> decode_full (>=90% consume
+guard) -> msvm_semantics (dispatch + alias executor) -> msvm_decomp
+(readable Lua) -> clean_lua (provenance comments stripped, code+labels
+kept).  The report line prints blob size, recovered seed, consume ratio,
+slot/macro/dead counts.  On the real sample: blob=13702, seed=252,
+6843/6843 (100.0%), 14 protos, 516 slots, 368 macros, 12 dead (2.3%).
+`msvm_decomp` gained `--clean` and `clean_lua`; `lua_lit` now renders
+live-path bytes constants as proper Lua strings / x'<hex>'.
+
+`--test` is 6/6 (clean_lua code/comment split; full chain on the in-repo
+real sample with honest skip if absent).  opmap STEP 25 added.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -222,9 +382,11 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-21 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-25 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
-(19), moonsec msvm_opcodes (20), moonsec msvm_lift (21).
+(19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
+msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
+moonsec decompile (25).
