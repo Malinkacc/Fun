@@ -135,7 +135,6 @@ KEYWORDS = {
     'continue': TokenType.CONTINUE,
     'export': TokenType.EXPORT,
     'type': TokenType.TYPE,
-    'typeof': TokenType.TYPEOF,
 }
 
 

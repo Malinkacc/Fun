@@ -456,12 +456,18 @@ class Parser:
             self._skip_until_gt()
 
         self._expect(TokenType.ASSIGN, "Expected '=' in type alias")
+        start = self.pos
         self._skip_type()
-        return TypeAliasStat(line=line, name=name.value, type_expr="", is_export=is_export)
+        type_text = " ".join(
+            (t.raw or str(t.value)) for t in self.tokens[start:self.pos]
+        )
+        return TypeAliasStat(line=line, name=name.value, type_expr=type_text,
+                             is_export=is_export)
 
     def _skip_type(self):
-        """Пропускает type expression (упрощённо)."""
+        """Пропускает type expression; не глотает следующий стейтмент."""
         depth = 0
+        expect = True   # ждём operand типа (сразу после '=' или оператора)
 
         while True:
             tok = self._current()
@@ -471,12 +477,14 @@ class Parser:
 
             if tok.type in (TokenType.LT, TokenType.LPAREN, TokenType.LBRACE, TokenType.LBRACKET):
                 depth += 1
+                expect = True
                 self._advance()
                 continue
 
             if tok.type in (TokenType.GT, TokenType.RPAREN, TokenType.RBRACE, TokenType.RBRACKET):
                 if depth > 0:
                     depth -= 1
+                    expect = False
                     self._advance()
                     continue
                 else:
@@ -491,6 +499,16 @@ class Parser:
                     TokenType.IN
                 ):
                     break
+                # Имя после завершённого типа = начало нового стейтмента.
+                # Префиксы keyof/typeof/readonly сами ждут operand дальше.
+                if tok.type == TokenType.NAME and not expect:
+                    if str(tok.value) not in ('typeof', 'keyof', 'readonly'):
+                        break
+                if tok.type in (TokenType.NAME, TokenType.STRING, TokenType.NUMBER):
+                    expect = False
+                elif tok.type in (TokenType.PIPE, TokenType.QUESTION, TokenType.ARROW,
+                                  TokenType.DOT, TokenType.COLON, TokenType.ELLIPSIS):
+                    expect = True
 
             self._advance()
 
