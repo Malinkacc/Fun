@@ -234,6 +234,13 @@ $c32 = $LASTEXITCODE
 $o32 | Select-Object -Last 2
 if ($c32 -ne 0) { $fail = 1; Write-Host "[XX] closures self-test FAILED"; $o32 | Select-Object -Last 6 } else { Write-Host "[OK] wearedevs closures self-test passed" }
 
-Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26..32 self-test lines"
+Write-Host ""
+Write-Host "== STEP 33: bot sprint7 core self-test (head-less, expect 3/3)"
+$o33 = py -m bot.sprint7 --test 2>&1
+$c33 = $LASTEXITCODE
+$o33 | Select-Object -Last 2
+if ($c33 -ne 0) { $fail = 1; Write-Host "[XX] bot sprint7 self-test FAILED"; $o33 | Select-Object -Last 6 } else { Write-Host "[OK] bot sprint7 core passed" }
+
+Write-Host "== EXPECTED: STEP2 'leaves=157'; STEP4 lines like 'function vmfn1(...)' and r12[...]=...; STEP22 'duplicate-body opcode groups'; STEP24 self-test lines; STEP25 chain self-test 6/6; STEP26..33 self-test lines"
 if ($fail -eq 0) { Write-Host "[OK] ALL STEPS PASSED" } else { Write-Host "[XX] FAILURES PRESENT - send me the full output" }
 exit $fail

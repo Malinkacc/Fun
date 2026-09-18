@@ -938,3 +938,7 @@ bot.tree.add_command(settings_group)
 # ── Запуск ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     bot.run(TOKEN)
+
+# -- Sprint 7 tools (slice 2e-1): /moonsec /wdmap /coverage --
+from bot.sprint7 import register_sprint7 as _register_sprint7
+_register_sprint7(bot, globals())

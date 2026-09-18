@@ -590,6 +590,30 @@ bodies/ifs/gotos).  `--test` is 6/6 (creation collection; non-maker
 ignored; non-const state ignored; varargs B; island BFS sizes; re-run
 stability).  opmap STEP 32.
 
+## Bot integration (slice 2e-1, `bot/sprint7.py`)
+
+The three sprint-7 tools are now Discord slash commands.  Zero touch on
+the existing 7 bot commands: a NEW module `bot/sprint7.py` registers
+them; `bot/bot.py` gets exactly two lines appended at the end
+(`from bot.sprint7 import register_sprint7` + call with `globals()`) so
+the new commands reuse the bot's own access control, embed helpers,
+colors and file-size limits.
+
+* `/moonsec file [struct]` -- MoonSec V3 -> readable `.lua` back in the
+  channel (stats embed: blob/seed/consume, protos/slots/macros/dead,
+  structured counts); falls back to an honest error embed if the file is
+  not MoonSec V3 (the chain refuses, nothing guessed);
+* `/wdmap file` -- WeAreDevs closure map (creations/closures, tree
+  partition %, top-8 sizes) + `wd_closures.json` attachment;
+* `/coverage` -- the live coverage panel: overall embed (92.5% vs
+  baseline 15%) + `coverage.md` attachment.
+
+Heavy work runs in the executor (timeouts 120-300 s; real samples need
+0.1 s / 10 s / 18 s).  Head-less core is discord-free and self-tested:
+`py -m bot.sprint7 --test` = 3/3 (moonsec core on the real sample;
+coverage overall 92.5%; wdmap 495 closures / 99.8% partition).
+opmap STEP 33.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -600,7 +624,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-32 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-33 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -609,4 +633,5 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
 (27), wearedevs rt_names (28), wearedevs block_lift (29), coverage panel
-(30), wearedevs cfg_lift (31), wearedevs closures (32).
+(30), wearedevs cfg_lift (31), wearedevs closures (32), bot sprint7 core
+(33).
