@@ -33,7 +33,7 @@ from obfuscator.deobfuscator.moonsec.msvm_decomp import (
 )
 
 
-def decompile_source(src):
+def decompile_source(src, structured=False):
     """Full chain on obfuscated source text.
     Returns (lua_text, stats, info) or raises ValueError with a reason."""
     from obfuscator.deobfuscator.moonsec.proto_decode import (
@@ -55,19 +55,46 @@ def decompile_source(src):
         raise ValueError('proto tree consumes only %.1f%% of the blob' % frac)
     sem = extract_sem(src)
     opinfo = {str(k): v for k, v in sem['ops'].items()}
-    text, stats = lift_tree(proto, opinfo)
-    info = {
-        'blob_chars': len(blob),
-        'seed': f,
-        'consumed': consumed,
-        'total': total,
-        'consume_pct': frac,
-        'protos': len(stats),
-        'slots': sum(s['slots'] for s in stats),
-        'macros': sum(s['macros'] for s in stats),
-        'dead': sum(s['junk'] for s in stats),
-        'filler': sum(s['filler'] for s in stats),
-    }
+    if structured:
+        from obfuscator.deobfuscator.moonsec.msvm_struct import lift_tree_struct
+        text, stats = lift_tree_struct(proto, opinfo)
+    else:
+        text, stats = lift_tree(proto, opinfo)
+    if structured:
+        tot = {}
+        for s in stats:
+            for k, v in s.items():
+                if isinstance(v, int):
+                    tot[k] = tot.get(k, 0) + v
+        info = {
+            'blob_chars': len(blob), 'seed': f, 'consumed': consumed,
+            'total': total, 'consume_pct': frac, 'protos': len(stats),
+            'slots': tot.get('linear', 0) + tot.get('goto', 0)
+                     + tot.get('for', 0) + tot.get('dead', 0)
+                     + tot.get('filler', 0) + tot.get('ret', 0)
+                     + tot.get('if', 0) + tot.get('ifelse', 0)
+                     + tot.get('ifret', 0) + tot.get('repeat', 0),
+            'macros': tot.get('linear', 0) + tot.get('goto', 0)
+                      + tot.get('for', 0) + tot.get('if', 0)
+                      + tot.get('ifelse', 0) + tot.get('ifret', 0)
+                      + tot.get('repeat', 0) + tot.get('ret', 0),
+            'dead': tot.get('dead', 0),
+            'filler': tot.get('filler', 0),
+            'struct': tot,
+        }
+    else:
+        info = {
+            'blob_chars': len(blob),
+            'seed': f,
+            'consumed': consumed,
+            'total': total,
+            'consume_pct': frac,
+            'protos': len(stats),
+            'slots': sum(s['slots'] for s in stats),
+            'macros': sum(s['macros'] for s in stats),
+            'dead': sum(s['junk'] for s in stats),
+            'filler': sum(s['filler'] for s in stats),
+        }
     return text, stats, info
 
 
@@ -132,6 +159,8 @@ def main(argv=None):
     ap.add_argument('--out', dest='out', default=None)
     ap.add_argument('--outdir', default='out')
     ap.add_argument('--clean', action='store_true')
+    ap.add_argument('--struct', action='store_true',
+                    help='structured control flow (if/else/repeat) output')
     ap.add_argument('--show', type=int, default=40)
     a = ap.parse_args(argv)
     if a.test:
@@ -141,7 +170,7 @@ def main(argv=None):
         return 2
     src = open(a.inp, encoding='utf-8', errors='replace').read()
     try:
-        text, stats, info = decompile_source(src)
+        text, stats, info = decompile_source(src, structured=a.struct)
     except ValueError as e:
         print('[XX] %s' % e)
         return 1
@@ -159,6 +188,15 @@ def main(argv=None):
     print('protos=%d ; slots=%d ; macros=%d ; dead=%d (%.1f%%) ; filler(op24)=%d'
           % (info['protos'], info['slots'], info['macros'], info['dead'],
              100.0 * info['dead'] / max(1, info['slots']), info['filler']))
+    if a.struct and stats and 'if' in stats[0]:
+        tot = {}
+        for s in stats:
+            for k, v in s.items():
+                if isinstance(v, int):
+                    tot[k] = tot.get(k, 0) + v
+        print('structured: if=%d ifelse=%d ifret=%d repeat=%d ; fallback gotos=%d'
+              % (tot.get('if', 0), tot.get('ifelse', 0), tot.get('ifret', 0),
+                 tot.get('repeat', 0), tot.get('goto', 0)))
     lines = text.split('\n')
     for ln in lines[:a.show]:
         print(ln)

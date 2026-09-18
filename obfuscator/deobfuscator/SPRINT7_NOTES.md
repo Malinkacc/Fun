@@ -372,6 +372,37 @@ live-path bytes constants as proper Lua strings / x'<hex>'.
 `--test` is 6/6 (clean_lua code/comment split; full chain on the in-repo
 real sample with honest skip if absent).  opmap STEP 25 added.
 
+## MoonSec V3 structured control flow (slice 2b-12, `moonsec/msvm_struct.py`)
+
+The goto-form Lua (2b-10) upgrades to STRUCTURED control flow where the CFG
+proves it; every unmatched site falls back to the goto form, so structure
+never costs correctness:
+
+* repeat-until: TEST-family latch with BACKWARD target T (handler TRUE
+  exits, FALSE repeats) -> `repeat <body T..S> until <cond>`.  Arbitrary
+  gotos INSIDE the body are legal (they stay in the loop), so no interior
+  check for loops; anti-tamper back-edges that target mid-superinstr
+  slots (not macro starts) simply never qualify.  On the sample this
+  recovered the embedded program's own dispatch loop (proto 0.1).
+* if-then / if-else / if-return: TEST-family with FORWARD target T.
+  TRUE branch skips one PADDING slot (S+1) — the padding slot is still
+  rendered after the construct (it can be a jump target from elsewhere);
+  then-region = S+2..join.  Else-terminator = `goto J>T` inside T..;
+  then-terminator = RETURN; otherwise join at T.  Safety: no jump target
+  may land strictly inside a then/else region (checked against the
+  proto's full target set) -> fallback.
+* Deliberately kept in goto/marker form: EQ_K + TESTSET (inverted/derived
+  polarity), numeric FORLOOP/FORPREP (control-var register writes live in
+  the alias-unrolled handlers — documented gap), unconditional JMPs.
+* Labels are emitted only for targets still referenced by a remaining
+  goto.  Real sample: 14 protos -> if=8 ifelse=4 ifret=2 repeat=2
+  structured, fallback gotos=53, dead=3; `decompile --struct --clean`
+  gives the one-command structured output.
+
+`--test` is 6/6 (repeat; if-then incl. pad retention; if-else order;
+if-return; if nested in repeat; interior-jump fallback with labels).
+opmap STEP 26 added.  `decompile.py` gained `--struct`.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -382,11 +413,11 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-25 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-26 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
 moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 (19), moonsec msvm_opcodes (20), moonsec msvm_lift (21), moonsec
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
-moonsec decompile (25).
+moonsec decompile (25), moonsec msvm_struct (26).
