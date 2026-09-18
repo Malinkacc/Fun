@@ -535,6 +535,38 @@ metrics; overall = mean over families with live data.  `--test` is 6/6
 (aggregation over pct-only; all-info family -> None; md rows + n/a;
 overall math; providers present; MoonVeil honest n/a).  opmap STEP 30.
 
+## WeAreDevs CFG lift (slice 2c-4, `wearedevs/cfg_lift.py`)
+
+Joins blocks through the control-flow graph: the transition assignment
+(last plain-Q) becomes CONTROL, the rest stays as body.  The obfuscator
+builds conditions THROUGH TEMPS (`L=6798405 l=1048603 Q=l and L; Q=Q or l`),
+so transition extraction runs a version-correct sequential dataflow
+substitution (env per statement; reads capture values at read time;
+budget-capped) and unwraps `cond and TRUE or FALSE` from the substituted
+value.  Emitter: straight runs collapse into regions; cond renders
+`if <cond> then <true chain> else <false chain> end` (depth-limited);
+multi-pred blocks get labels; cycles = back-gotos; equal cond targets
+degenerate to straight.
+
+Real-sample findings:
+
+* entry closure flow: 3362 blocks -> 75 regions, 33 ifs, 32 labels,
+  32 gotos (vs 4020 raw transitions); conditions read like program logic
+  (`if W[K] ~= "hYw2ScQoIE2gA" then` -- the closure-registration check).
+* the 656 "indirect" leaves are DECOY TRAPS: `Q = V[m(...)]` reads a
+  GLOBAL (wrapper V = getfenv()) into the state var -- a table state
+  would crash the number-comparison tree on entry; only 2 are reachable.
+* ~513 leaves have zero predecessors (more decoys); the tree is SHARED
+  by all closures -- every closure enters the dispatcher at its own
+  state (maker call `C(x, L)`), so the other islands are other closures
+  -> mapping closure entry states is the 2c-5 slice.
+
+Output: `wd_flow.lua` (joined control flow) + `wd_flow.json` (stats).
+`--test` is 8/8 (chain join; if/else; join labels; indirect marker;
+cycle back-goto; equal targets; temp bool-build; version-correct
+dataflow).  opmap STEP 31.  Also fixed: `not` rendering lost its operand
+(ternary precedence) in block_lift.render_expr.
+
 ## Sandbox correctness fix (this sprint)
 
 Closures previously captured `dict(env)` copies: upvalue writes from inner
@@ -545,7 +577,7 @@ self-tests green.
 
 ## Runner
 
-`opmap.ps1` steps 1-30 (seconds each on user machine): Luraph pipeline (1-4),
+`opmap.ps1` steps 1-31 (seconds each on user machine): Luraph pipeline (1-4),
 dynamic_decrypt (5), moonsec string_harvest (6), moonveil vm_trace/vm_state/
 stream_assemble/vm_phase/vm_tables/vm_lift (7-12), wearedevs array_trace (13),
 sprint7 round-trip (14), moonsec mirror (15), wearedevs array_mirror (16),
@@ -554,4 +586,4 @@ moonveil opcode_semantics (17), moonsec vm_model (18), moonsec proto_decode
 msvm_dispatch (22), moonsec msvm_semantics (23), moonsec msvm_decomp (24),
 moonsec decompile (25), moonsec msvm_struct (26), wearedevs dispatch_map
 (27), wearedevs rt_names (28), wearedevs block_lift (29), coverage panel
-(30).
+(30), wearedevs cfg_lift (31).

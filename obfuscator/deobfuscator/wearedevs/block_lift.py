@@ -64,7 +64,10 @@ def render_expr(ast, mtab):
     if k == 'paren':
         return '(%s)' % render_expr(ast[1], mtab)
     if k == 'un':
-        return '%s%s' % (ast[1], render_expr(ast[2], mtab))
+        op = ast[1]
+        if op == 'not':
+            return 'not %s' % render_expr(ast[2], mtab)
+        return op + render_expr(ast[2], mtab)
     if k == 'bin':
         return '%s %s %s' % (render_expr(ast[2], mtab), ast[1],
                              render_expr(ast[3], mtab))
