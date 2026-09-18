@@ -100,6 +100,9 @@ def obfuscate(source: str) -> str:
         seed = random.randint(1, 2**31)
         vm_output = generate_vm_code(proto, seed=seed)
         
+        # Add call to the protected function
+        vm_output += '\nprotectedFn()\n'
+        
         # Remove comments from VM output
         clean_lines = []
         for line in vm_output.split('\n'):
