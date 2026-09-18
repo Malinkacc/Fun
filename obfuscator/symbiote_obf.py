@@ -1,16 +1,14 @@
 """
-NZL Studio Obfuscator — Luraph-style VM (Base85 + Long String + loadstring)
+NZL Studio Obfuscator — Luraph-style (loadstring-based)
 
-Methodology:
-1. Compile source → bytecode
-2. Encrypt bytecode (multi-layer: RC4 + XOR + shuffle)
+Simple but effective:
+1. Take source code as string (works with ANY Lua code)
+2. Encrypt (RC4 + XOR + shuffle)
 3. Encode to base85
 4. Wrap in long string [=[...]=]
-5. Generate runtime with:
-   - Base85 decoder
-   - Multi-layer decryptor
-   - loadstring for execution
-   - Anti-tamper with setmetatable
+5. Runtime: base85 decode → decrypt → loadstring → execute
+
+No parser, no compiler, no VM needed!
 """
 
 from __future__ import annotations
@@ -18,7 +16,6 @@ from __future__ import annotations
 import random
 import sys
 import os
-import zlib
 
 _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _root not in sys.path:
@@ -26,33 +23,15 @@ if _root not in sys.path:
 
 
 def obfuscate(source: str) -> str:
-    """Obfuscate using Luraph-style methodology."""
-    from obfuscator.lexer import Lexer
-    from obfuscator.parser import Parser
-    from obfuscator.vm.compiler import compile_function
-    from obfuscator.vm.opcodes import BytecodeEncoder, OpcodeMap
+    """Obfuscate any Lua code using loadstring-based approach."""
     from obfuscator.utils.crypto import rc4_encrypt, gen_random_key
     
-    wrapped = f'local function __main__() {source} end'
-    
     try:
-        # Parse and compile
-        tokens = Lexer(wrapped).tokenize()
-        ast = Parser(tokens).parse()
-        func_ast = ast.body.statements[0].func
-        
-        proto = compile_function(func_ast)
         seed = random.randint(1, 2**31)
         rng = random.Random(seed)
         
-        # Serialize bytecode
-        op_map = OpcodeMap(seed=rng.randint(1, 2**31))
-        encoder = BytecodeEncoder(op_map)
-        raw_bytecode = encoder.encode_proto(proto)
-        
-        # No compression for now (simpler)
-        # compressed = zlib.compress(raw_bytecode, level=9)
-        compressed = raw_bytecode
+        # Convert source to bytes
+        source_bytes = source.encode('utf-8')
         
         # Multi-layer encryption
         key = gen_random_key(16, rng=rng)
@@ -61,7 +40,7 @@ def obfuscate(source: str) -> str:
         rng.shuffle(shuffle_perm)
         
         # Layer 1: RC4
-        encrypted = rc4_encrypt(compressed, key)
+        encrypted = rc4_encrypt(source_bytes, key)
         
         # Layer 2: XOR with position
         encrypted2 = bytearray(encrypted)
@@ -143,7 +122,7 @@ def _encode_base85(data: bytes) -> str:
 def _generate_runtime(base85_blob: str, key: bytes, xor_seed: int, shuffle_perm: list, seed: int, rng: random.Random) -> str:
     """Generate Luraph-style runtime."""
     
-    # Generate random names (ensure uniqueness)
+    # Generate unique random names
     used_names = set()
     def gen_name():
         letters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -161,8 +140,8 @@ def _generate_runtime(base85_blob: str, key: bytes, xor_seed: int, shuffle_perm:
     string_gsub = gen_name()
     unpack_name = gen_name()
     type_name = gen_name()
-    loadstring = gen_name()
-    pcall = gen_name()
+    loadstring_name = gen_name()
+    pcall_name = gen_name()
     string_pack = gen_name()
     string_byte = gen_name()
     
@@ -175,24 +154,27 @@ def _generate_runtime(base85_blob: str, key: bytes, xor_seed: int, shuffle_perm:
     blob = gen_name()
     decoded = gen_name()
     decrypted = gen_name()
-    code = gen_name()
     
     # Build shuffle table
     shuffle_table = ','.join(str(x) for x in shuffle_perm)
     
-    # Build key parts (split into 4 chunks)
-    key_parts = []
-    chunk_size = max(1, len(key) // 4)
-    for i in range(0, len(key), chunk_size):
-        chunk = key[i:i+chunk_size]
-        key_parts.append(''.join(f'\\{b:03d}' for b in chunk))
+    # Build key as escaped string
+    key_escaped = ''.join(f'\\{b:03d}' for b in key)
     
-    key_reconstruct = f'local {gen_name()}="" for i=1,{len(key_parts)} do {gen_name()}={gen_name()}..{{"[{",".join(chr(34)+p+chr(34) for p in key_parts)}"]"}}[i] end'
+    # Check if blob contains ]] and adjust level
+    level = 1  # Start with level 1 to be safe
+    marker = ']' + '=' * level + ']'
+    while marker in base85_blob:
+        level += 1
+        marker = ']' + '=' * level + ']'
+    
+    eq = '=' * level
+    blob_wrapped = f'[{eq}[{base85_blob}]{eq}]'
     
     runtime = f'''-- This file was protected using NZL Studio Obfuscator v2.0
 
 return(function()
-local {setmetatable},{tostring},{string_sub},{string_char},{string_gsub},{unpack_name},{type_name},{loadstring},{pcall},{string_pack},{string_byte}=setmetatable,tostring,string.sub,string.char,string.gsub,table.unpack or unpack,type,loadstring,pcall,string.pack,string.byte
+local {setmetatable},{tostring},{string_sub},{string_char},{string_gsub},{unpack_name},{type_name},{loadstring_name},{pcall_name},{string_pack},{string_byte}=setmetatable,tostring,string.sub,string.char,string.gsub,table.unpack or unpack,type,loadstring,pcall,string.pack,string.byte
 
 -- Base85 decoder
 local {base85_decode}=function(u)
@@ -259,17 +241,14 @@ return rc4_dec
 end
 
 -- Decode blob
-local {blob}=[=[{base85_blob}]=]
+local {blob}={blob_wrapped}
 local {decoded}={base85_decode}({blob})
 
--- Reconstruct key
-local key="{key_parts[0]}".."{key_parts[1]}".."{key_parts[2]}".."{key_parts[3]}"
-
 -- Decrypt
-local {decrypted}={decrypt}({decoded},key)
+local {decrypted}={decrypt}({decoded},"{key_escaped}")
 
 -- Load and execute
-local fn,err={loadstring}({decrypted})
+local fn,err={loadstring_name}({decrypted})
 if not fn then error("Load error: "..tostring(err)) end
 return fn()
 end)()
