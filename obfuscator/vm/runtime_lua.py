@@ -64,15 +64,59 @@ class BytecodeSerializer:
         self.op_map = opcode_map
         self.encoder = BytecodeEncoder(opcode_map)
         self.rng = rng
+        
+        # Multi-layer encryption parameters
+        self.xor_seed = rng.randint(0, 255)
+        self.shuffle_perm = list(range(256))
+        rng.shuffle(self.shuffle_perm)
 
     def serialize_proto(self, proto: Proto, key: bytes) -> str:
         raw = self.encoder.encode_proto(proto)
+        
+        # Layer 1: RC4
         encrypted = rc4_encrypt(raw, key)
-        py_str = bytes_to_py_string(encrypted)
+        
+        # Layer 2: XOR with position
+        encrypted2 = bytearray(encrypted)
+        for i in range(len(encrypted2)):
+            encrypted2[i] ^= (i + self.xor_seed) % 256
+        
+        # Pad to multiple of 256 for shuffle
+        original_len = len(encrypted2)
+        pad_len = (256 - (original_len % 256)) % 256
+        encrypted2.extend([0] * pad_len)
+        
+        # Layer 3: Byte shuffle (permutation within 256-byte blocks)
+        encrypted3 = bytearray(len(encrypted2))
+        for i in range(len(encrypted2)):
+            block = i // 256
+            pos_in_block = i % 256
+            new_pos_in_block = self.shuffle_perm[pos_in_block]
+            new_pos = block * 256 + new_pos_in_block
+            encrypted3[new_pos] = encrypted2[i]
+        
+        # Store original length in first 4 bytes (big-endian)
+        length_bytes = original_len.to_bytes(4, 'big')
+        final_data = bytearray(length_bytes) + encrypted3
+        
+        py_str = bytes_to_py_string(bytes(final_data))
         return escape_lua_string(py_str)
 
-    def serialize_key(self, key: bytes) -> str:
-        return escape_lua_string(bytes_to_py_string(key))
+    def serialize_key_parts(self, key: bytes) -> str:
+        """Split key into parts for dynamic reconstruction."""
+        # Split key into 4 parts
+        parts = []
+        chunk_size = max(1, len(key) // 4)
+        for i in range(0, len(key), chunk_size):
+            chunk = key[i:i+chunk_size]
+            parts.append(escape_lua_string(bytes_to_py_string(chunk)))
+        return parts
+
+    def get_xor_seed(self) -> int:
+        return self.xor_seed
+
+    def get_shuffle_perm(self) -> list:
+        return self.shuffle_perm
 
 
 class RuntimeGenerator:
@@ -104,14 +148,16 @@ class RuntimeGenerator:
         key = gen_random_key(16, rng=self.rng)
 
         bc_lit = self.serializer.serialize_proto(proto, key)
-        key_lit = self.serializer.serialize_key(key)
+        key_parts = self.serializer.serialize_key_parts(key)
+        xor_seed = self.serializer.get_xor_seed()
+        shuffle_perm = self.serializer.get_shuffle_perm()
 
-        runtime_code = self._generate_runtime()
-        wrapper = self._generate_wrapper(fn_name, bc_lit, key_lit)
+        runtime_code = self._generate_runtime(xor_seed, shuffle_perm)
+        wrapper = self._generate_wrapper(fn_name, bc_lit, key_parts)
 
         return runtime_code + '\n\n' + wrapper
 
-    def _generate_runtime(self) -> str:
+    def _generate_runtime(self, xor_seed: int, shuffle_perm: list) -> str:
         n = self.names
         lines: List[str] = []
 
@@ -124,7 +170,10 @@ class RuntimeGenerator:
         lines.append(f'local {n.bxor} = bit32.bxor')
 
         lines.append('')
-        lines.append(self._gen_rc4_decrypt())
+        lines.append(self._gen_key_builder())
+        
+        lines.append('')
+        lines.append(self._gen_multi_layer_decrypt(xor_seed, shuffle_perm))
 
         lines.append('')
         lines.append(self._gen_bytecode_decoder())
@@ -136,6 +185,73 @@ class RuntimeGenerator:
         lines.append(self._gen_create_vm())
 
         return '\n'.join(lines)
+
+    def _gen_key_builder(self) -> str:
+        """Generate function to reconstruct key from parts."""
+        fn_name = self.name_gen.generate()
+        parts = self.name_gen.generate()
+        result = self.name_gen.generate()
+        i = self.name_gen.generate()
+        
+        code = f'''local function {fn_name}({parts})
+    local {result} = ""
+    for {i} = 1, #{parts} do
+        {result} = {result} .. {parts}[{i}]
+    end
+    return {result}
+end'''
+        self._key_builder_fn = fn_name
+        return code
+
+    def _gen_multi_layer_decrypt(self, xor_seed: int, shuffle_perm: list) -> str:
+        """Generate multi-layer decryption function (reverse of serialize_proto)."""
+        fn_name = self.name_gen.generate()
+        data = self.name_gen.generate()
+        key = self.name_gen.generate()
+        
+        # Shuffle permutation table (forward - same as Python used)
+        shuffle_table = ','.join(str(x) for x in shuffle_perm)
+        
+        tmp1 = self.name_gen.generate()
+        tmp2 = self.name_gen.generate()
+        i = self.name_gen.generate()
+        rc4_dec = self.name_gen.generate()
+        unshuffle = self.name_gen.generate()
+        unxor = self.name_gen.generate()
+        orig_len = self.name_gen.generate()
+        payload = self.name_gen.generate()
+        block = self.name_gen.generate()
+        pos_in_block = self.name_gen.generate()
+        new_pos = self.name_gen.generate()
+        
+        code = f'''local function {fn_name}({data}, {key})
+    -- Read original length (first 4 bytes, big-endian)
+    local {orig_len} = {data}:byte(1) * 16777216 + {data}:byte(2) * 65536 + {data}:byte(3) * 256 + {data}:byte(4)
+    local {payload} = {data}:sub(5)
+    
+    -- Layer 3: Reverse shuffle (within 256-byte blocks)
+    local {unshuffle} = ""
+    local {tmp1} = {{{shuffle_table}}}
+    for {i} = 1, {orig_len} do
+        local {block} = math.floor(({i} - 1) / 256)
+        local {pos_in_block} = ({i} - 1) % 256
+        local {new_pos} = {block} * 256 + {tmp1}[{pos_in_block} + 1] + 1
+        {unshuffle} = {unshuffle} .. string.char({payload}:byte({new_pos}))
+    end
+    
+    -- Layer 2: Reverse XOR with position
+    local {unxor} = ""
+    for {i} = 1, #{unshuffle} do
+        {unxor} = {unxor} .. string.char(bit32.bxor({unshuffle}:byte({i}), ({i} - 1 + {xor_seed}) % 256))
+    end
+    
+    -- Layer 1: RC4
+    local {rc4_dec} = {self.names.decode_str}({unxor}, {key})
+    
+    return {rc4_dec}
+end'''
+        self._multi_decrypt_fn = fn_name
+        return code
 
     def _gen_rc4_decrypt(self) -> str:
         n = self.names
@@ -685,7 +801,7 @@ end'''
         p = self.name_gen.generate()
 
         code = f'''local function {n.create_vm}({bc}, {k})
-    local {dec} = {n.decode_str}({bc}, {k})
+    local {dec} = {self._multi_decrypt_fn}({bc}, {k})
     local {p} = {n.decode_bc}({dec})
     return function(...)
         return {n.execute}({p}, {{...}}, nil)
@@ -693,12 +809,14 @@ end'''
 end'''
         return code
 
-    def _generate_wrapper(self, fn_name: str, bytecode_lit: str, key_lit: str) -> str:
+    def _generate_wrapper(self, fn_name: str, bytecode_lit: str, key_parts: list) -> str:
         n = self.names
+        # Build key parts array
+        parts_str = ','.join(key_parts)
         return f'''-- VM-protected function
 local {fn_name} = {n.create_vm}(
     {bytecode_lit},
-    {key_lit}
+    {self._key_builder_fn}({{{parts_str}}})
 )'''
 
     def stats(self) -> Dict[str, Any]:
