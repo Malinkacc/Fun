@@ -940,5 +940,10 @@ if __name__ == "__main__":
     bot.run(TOKEN)
 
 # -- Sprint 7 tools (slice 2e-1): /moonsec /wdmap /coverage --
-from bot.sprint7 import register_sprint7 as _register_sprint7
-_register_sprint7(bot, globals())
+# loaded by path so `py bot\bot.py` (script-style launch) works too
+import importlib.util as _ilu
+_s7p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sprint7.py")
+_s7spec = _ilu.spec_from_file_location("nzl_sprint7", _s7p)
+_s7 = importlib.util.module_from_spec(_s7spec)
+_s7spec.loader.exec_module(_s7)
+_s7.register_sprint7(bot, globals())
