@@ -41,11 +41,10 @@ def obfuscate(source: str) -> str:
     rc4_key = gen_random_key(32, rng=rng)
     xor_key = rng.randint(1, 254)  # Avoid 0
 
-    # Generate shuffle permutation from seed (algorithmic, not stored)
-    shuffle_seed = rng.randint(1, 2**31)
-    shuffle_rng = random.Random(shuffle_seed)
-    perm = list(range(256))
-    shuffle_rng.shuffle(perm)
+    # Generate shuffle permutation from seed using Park-Miller LCG
+    # Same algorithm runs in Lua runtime — no need to store permutation
+    shuffle_seed = rng.randint(1, 2147483646)
+    perm = _lcg_shuffle(shuffle_seed, 256)
 
     # ── Step 3: Encrypt ──
     # Layer 1: RC4 with key
@@ -73,13 +72,31 @@ def obfuscate(source: str) -> str:
     blob = _b85_encode(final)
 
     # ── Step 5: Generate runtime ──
-    return _build_runtime(blob, rc4_key, xor_key, perm, seed, rng)
+    return _build_runtime(blob, rc4_key, xor_key, shuffle_seed, seed, rng)
 
 
 def obfuscate_script(source: str, seed: int = None) -> str:
     if seed is not None:
         random.seed(seed)
     return obfuscate(source)
+
+
+# ═══════════════════════════════════════════════════════
+#  Park-Miller LCG shuffle (reproducible in Lua)
+# ═══════════════════════════════════════════════════════
+
+def _lcg_shuffle(seed: int, n: int = 256) -> list:
+    """Fisher-Yates shuffle with Park-Miller LCG (s*16807 mod 2^31-1)
+    Safe for Lua doubles: max product = 16807 * 2147483646 ≈ 3.6e13 < 2^53"""
+    perm = list(range(n))
+    s = seed % 2147483647
+    if s == 0:
+        s = 1
+    for i in range(n - 1, 0, -1):
+        s = (s * 16807) % 2147483647
+        j = s % (i + 1)
+        perm[i], perm[j] = perm[j], perm[i]
+    return perm
 
 
 # ═══════════════════════════════════════════════════════
@@ -109,7 +126,7 @@ def _b85_encode(data: bytes) -> str:
 #  Runtime builder
 # ═══════════════════════════════════════════════════════
 
-def _build_runtime(blob: str, key: bytes, xor_key: int, perm: list, seed: int, rng: random.Random) -> str:
+def _build_runtime(blob: str, key: bytes, xor_key: int, shuffle_seed: int, seed: int, rng: random.Random) -> str:
     # ── Name generator ──
     taken = set()
     def nm(n=2):
@@ -154,11 +171,8 @@ def _build_runtime(blob: str, key: bytes, xor_key: int, perm: list, seed: int, r
         key_parts.append(f'{N["sc"]}({",".join(exprs)})')
     key_expr = '..'.join(key_parts)
 
-    # ── Shuffle table as string.char expression ──
-    # Instead of {227,141,160,...} store as generated from a formula
-    # But for correctness, we need exact permutation — use table literal
-    # Compact: write as hex pairs decoded at runtime
-    perm_str = ''.join(f'\\{b:03d}' for b in perm)
+    # ── Shuffle seed (permutation generated in runtime via LCG) ──
+    # No stored permutation — just a single integer seed
 
     # ── Long string level ──
     level = 0
@@ -196,8 +210,8 @@ def _build_runtime(blob: str, key: bytes, xor_key: int, perm: list, seed: int, r
     P.append(f'local n={N["sb"]}(d,1)*16777216+{N["sb"]}(d,2)*65536+{N["sb"]}(d,3)*256+{N["sb"]}(d,4)')
     P.append(f'local p={N["ss"]}(d,5)')
 
-    # Reverse shuffle (table-based!)
-    P.append(f'local sh={{}}do local s="{perm_str}"for i=1,256 do sh[i-1]={N["sb"]}(s,i)end end')
+    # Reverse shuffle — generate permutation from seed (Park-Miller LCG)
+    P.append(f'local sh={{}}for i=0,255 do sh[i]=i end do local s={shuffle_seed}%2147483647 if s==0 then s=1 end for i=255,1,-1 do s=(s*16807)%2147483647 local j=s%(i+1)sh[i],sh[j]=sh[j],sh[i]end end')
     P.append(f'local t={{}}for i=1,n do local bl={N["i2n"]}((i-1)/256)local ps=(i-1)%256 t[i]={N["sb"]}(p,bl*256+sh[ps]+1)end')
 
     # Reverse XOR (in-place on table)
