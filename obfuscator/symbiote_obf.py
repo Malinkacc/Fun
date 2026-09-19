@@ -108,7 +108,7 @@ def _b85_encode(data: bytes) -> str:
     data += b'\x00' * pad
     out = []
     for i in range(0, len(data), 4):
-        v = int.from_bytes(data[i:i+4], 'big')
+        v = int.from_bytes(data[i:i+4], 'little')  # little-endian to match b4()
         if v == 0:
             out.append('z')
         else:
