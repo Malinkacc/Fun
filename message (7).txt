@@ -1,0 +1,1854 @@
+-- BCW HUB v19 (Trepid Multi-Target)
+
+pcall(function()
+	if Library and Library.Unload then
+		Library:Unload()
+	end
+end)
+pcall(function()
+	for _, g in ipairs(game:GetService("CoreGui"):GetChildren()) do
+		if g.Name == "BCWHub" or g.Name:find("Linoria") or g.Name == "BCWFps" then
+			g:Destroy()
+		end
+	end
+end)
+Library = nil
+ThemeManager = nil
+SaveManager = nil
+Options = nil
+Toggles = nil
+task.wait(0.15)
+
+local repo = "https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main/"
+local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+if not Library then
+	warn("[BCW] LINORIA FAILED")
+	return
+end
+
+local Players = game:GetService("Players")
+local WS = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TS = game:GetService("TeleportService")
+local HTTP = game:GetService("HttpService")
+local Lighting = game:GetService("Lighting")
+local VI = game:GetService("VirtualInputManager")
+local LP = Players.LocalPlayer
+
+local function getChar()
+	return LP.Character
+end
+local function getHum()
+	local c = getChar()
+	return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function getHRP()
+	local c = getChar()
+	return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getTorso()
+	local c = getChar()
+	return c and c:FindFirstChild("Torso")
+end
+local function notify(t, d)
+	pcall(function()
+		Library:Notify(t, d or 3)
+	end)
+end
+
+local SUMMON_MAP = {
+	["Equinox Seal"] = "Twilight",
+	["Eldritch Tentacles"] = "Abomination",
+	["Trepid Terror"] = { "createarm", "creature" },
+	["Unknown Signal Emitter"] = "hologramactivate",
+	["Ominous Dark Egg"] = "Fiscus",
+	["Magic Conch"] = "Siren",
+	["Mysterious Artifact"] = "summon",
+	["Suspicious Invitation"] = "summon",
+}
+
+local WEAPON_ATTACK = {
+	["Trepid Terror"] = { method = "hit", args = { 1000, 2.5, 4 } },
+	["Apocalypse"] = { method = "hit", args = { 150, 2 } },
+	["Fang of Gilgamesh"] = { method = "hit", args = { 8000, 2 }, reset = "destroyitself" },
+	["Yin Yang"] = { method = "hit", args = { 2 }, needsPos = true },
+	["Ban Hammer"] = { method = "hit", args = { 1 }, needsPos = true },
+	["Extinction Ray"] = { method = "shoot", args = {}, needsPos = true },
+	["Staff of Conflict"] = { method = "ConflictOrbs", args = {}, needsPos = true },
+	["Equinox Slicer"] = { method = "hit", args = { 148, 2, -1 }, needsPos = true, posFirst = true },
+	["Spirit Glaive"] = { method = "hit", args = {}, reset = "weld" },
+	["The Light Illuminating the World"] = { method = "Swing", args = { 2 }, reset = "motor6dconnect", after = "motor6dremove" },
+}
+
+local WEAPON_EXTRAS = {
+	["Ban Hammer"] = function(rf)
+		pcall(function()
+			rf:InvokeServer("slam")
+		end)
+		pcall(function()
+			rf:InvokeServer("slambarrage")
+		end)
+	end,
+	["Yin Yang"] = function(rf)
+		pcall(function()
+			rf:InvokeServer("lightpunch")
+		end)
+		pcall(function()
+			rf:InvokeServer("dualwield", false)
+		end)
+	end,
+	["Spirit Glaive"] = function(rf, m)
+		if m and m.Part then
+			pcall(function()
+				rf:InvokeServer("dash", { m.Part.CFrame })
+			end)
+		end
+	end,
+	["Fang of Gilgamesh"] = function(rf)
+		pcall(function()
+			rf:InvokeServer("consumerspikes")
+		end)
+		pcall(function()
+			rf:InvokeServer("consumertrains")
+		end)
+		pcall(function()
+			rf:InvokeServer("realitytear")
+		end)
+	end,
+	["Trepid Terror"] = function(rf, m)
+		pcall(function()
+			rf:InvokeServer("creature")
+		end)
+		if m then
+			local hrp = getHRP()
+			if hrp then
+				pcall(function()
+					rf:InvokeServer("shoot", { hrp.Position, m.Pos })
+				end)
+			end
+		end
+	end,
+}
+
+local DUNGEONS = {
+	{ "Caverns", "Caverns" },
+	{ "Ring of Fire", "RingOfFire" },
+	{ "Aurora Glacier", "AuroraGlacier" },
+	{ "Blue Sea", "BlueSea" },
+	{ "Eye of Storm", "EyeOfTheStorm" },
+	{ "Omens of War", "OmensOfWar" },
+	{ "Khrysos", "KhrysosTemple" },
+	{ "Creus Arena", "CreusArena" },
+	{ "The Void", "TheVoid" },
+}
+
+local function getEquipped()
+	local c = getChar()
+	if not c then
+		return nil
+	end
+	for _, o in ipairs(c:GetChildren()) do
+		if o:IsA("Tool") then
+			return o
+		end
+	end
+end
+local function allTools()
+	local t = {}
+	local c = getChar()
+	if c then
+		for _, o in ipairs(c:GetChildren()) do
+			if o:IsA("Tool") then
+				table.insert(t, o)
+			end
+		end
+	end
+	for _, o in ipairs(LP.Backpack:GetChildren()) do
+		if o:IsA("Tool") then
+			table.insert(t, o)
+		end
+	end
+	return t
+end
+local function findToolByName(name)
+	for _, t in ipairs(allTools()) do
+		if t.Name == name then
+			return t
+		end
+	end
+end
+local function getAllToolNames()
+	local n = {}
+	for _, t in ipairs(allTools()) do
+		table.insert(n, t.Name)
+	end
+	table.sort(n)
+	return n
+end
+
+local function realWeaponAttack(tool, mob)
+	if not tool then
+		return false
+	end
+	local rf = tool:FindFirstChildOfClass("RemoteFunction")
+	if not rf then
+		return false
+	end
+	local cfg = WEAPON_ATTACK[tool.Name]
+	if cfg then
+		if cfg.reset then
+			pcall(function()
+				rf:InvokeServer(cfg.reset, {})
+			end)
+		end
+		if tool.Name == "Trepid Terror" and mob then
+			local hrp = getHRP()
+			if hrp then
+				pcall(function()
+					rf:InvokeServer("createarm", { true, hrp.CFrame })
+				end)
+			end
+		end
+		local fa = {}
+		if cfg.needsPos and mob and mob.Pos then
+			if cfg.posFirst then
+				table.insert(fa, mob.Pos)
+				for _, a in ipairs(cfg.args) do
+					table.insert(fa, a)
+				end
+			else
+				for _, a in ipairs(cfg.args) do
+					table.insert(fa, a)
+				end
+				table.insert(fa, mob.Pos)
+			end
+		else
+			for _, a in ipairs(cfg.args) do
+				table.insert(fa, a)
+			end
+		end
+		pcall(function()
+			rf:InvokeServer(cfg.method, fa)
+		end)
+		if WEAPON_EXTRAS[tool.Name] then
+			pcall(function()
+				WEAPON_EXTRAS[tool.Name](rf, mob)
+			end)
+		end
+		if cfg.after then
+			pcall(function()
+				rf:InvokeServer(cfg.after, {})
+			end)
+		end
+		return true
+	else
+		pcall(function()
+			rf:InvokeServer("destroyitself", {})
+		end)
+		pcall(function()
+			rf:InvokeServer("hit", { 8000, 2 })
+		end)
+		if mob and mob.Pos then
+			pcall(function()
+				rf:InvokeServer("hit", { 8000, mob.Pos })
+			end)
+		end
+		return true
+	end
+end
+
+local function attackWithAllWeapons(mob)
+	for _, tool in ipairs(allTools()) do
+		pcall(function()
+			realWeaponAttack(tool, mob)
+		end)
+	end
+end
+
+local function abilitySpam()
+	local tool = getEquipped()
+	if not tool then
+		return
+	end
+	local rf = tool:FindFirstChildOfClass("RemoteFunction")
+	if not rf then
+		return
+	end
+	for _, ab in ipairs({
+		"consumerspikes",
+		"consumertrains",
+		"realitytear",
+		"destroyitself",
+		"slam",
+		"slambarrage",
+		"Swing",
+		"dash",
+		"Rush",
+		"lightpunch",
+		"creature",
+	}) do
+		pcall(function()
+			rf:InvokeServer(ab)
+		end)
+	end
+end
+
+-- Trepid Terror SHOOT ONLY — стреляет по ВСЕМ мобам в радиусе
+local function trepidShootAll(mobs)
+	local tool = findToolByName("Trepid Terror")
+	if not tool then
+		return
+	end
+	local rf = tool:FindFirstChildOfClass("RemoteFunction")
+	if not rf then
+		return
+	end
+	local hrp = getHRP()
+	if not hrp then
+		return
+	end
+	for _, m in ipairs(mobs) do
+		task.spawn(function()
+			pcall(function()
+				rf:InvokeServer("shoot", { hrp.Position, m.Pos })
+			end)
+		end)
+	end
+end
+
+-- Trepid Shoot loop — бьёт ВСЕ цели в радиусе
+task.spawn(function()
+	while true do
+		local speed = (Options and Options.TrepidSpeed and Options.TrepidSpeed.Value) or 0.05
+		task.wait(speed)
+		if not (Toggles and Toggles.TrepidSpam and Toggles.TrepidSpam.Value) then
+			continue
+		end
+		local hrp = getHRP()
+		if not hrp then
+			continue
+		end
+		local radius = (Options and Options.TrepidRadius and Options.TrepidRadius.Value) or 500
+		local targets = {}
+		for _, m in ipairs(getMobs(false)) do
+			if (hrp.Position - m.Pos).Magnitude <= radius and m.Hum.Health > 0 then
+				table.insert(targets, m)
+			end
+		end
+		if #targets > 0 then
+			trepidShootAll(targets)
+		end
+	end
+end)
+
+-- Trepid Aggressive extra — ещё быстрее по всем
+task.spawn(function()
+	while true do
+		task.wait(0.03)
+		if
+			not (
+				Toggles
+				and Toggles.TrepidSpam
+				and Toggles.TrepidSpam.Value
+				and Toggles.TrepidAggressive
+				and Toggles.TrepidAggressive.Value
+			)
+		then
+			continue
+		end
+		local hrp = getHRP()
+		if not hrp then
+			continue
+		end
+		local radius = (Options and Options.TrepidRadius and Options.TrepidRadius.Value) or 500
+		local targets = {}
+		for _, m in ipairs(getMobs(false)) do
+			if (hrp.Position - m.Pos).Magnitude <= radius and m.Hum.Health > 0 then
+				table.insert(targets, m)
+			end
+		end
+		if #targets > 0 then
+			trepidShootAll(targets)
+		end
+	end
+end)
+
+-- Kill Aura loop — экипированное оружие по всем/ближайшему
+task.spawn(function()
+	while true do
+		local speed = (Options and Options.KASpeed and Options.KASpeed.Value) or 0.05
+		task.wait(speed)
+		if not (Toggles and Toggles.KillAura and Toggles.KillAura.Value) then
+			continue
+		end
+		local hrp = getHRP()
+		if not hrp then
+			continue
+		end
+		local r = (Options and Options.KAR and Options.KAR.Value) or 100
+		for _, m in ipairs(getMobs(false)) do
+			if (hrp.Position - m.Pos).Magnitude <= r and m.Hum.Health > 0 then
+				local tool = getEquipped()
+				if tool then
+					task.spawn(function()
+						realWeaponAttack(tool, m)
+					end)
+				end
+				if not (Toggles and Toggles.KillAuraAggressive and Toggles.KillAuraAggressive.Value) then
+					break
+				end
+			end
+		end
+	end
+end)
+
+-- Kill Aura Aggressive extra
+task.spawn(function()
+	while true do
+		task.wait(0.03)
+		if
+			not (
+				Toggles
+				and Toggles.KillAura
+				and Toggles.KillAura.Value
+				and Toggles.KillAuraAggressive
+				and Toggles.KillAuraAggressive.Value
+			)
+		then
+			continue
+		end
+		local hrp = getHRP()
+		if not hrp then
+			continue
+		end
+		local r = (Options and Options.KAR and Options.KAR.Value) or 100
+		for _, m in ipairs(getMobs(false)) do
+			if (hrp.Position - m.Pos).Magnitude <= r and m.Hum.Health > 0 then
+				local tool = getEquipped()
+				if tool then
+					task.spawn(function()
+						realWeaponAttack(tool, m)
+					end)
+				end
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+		if Toggles and Toggles.NoCD and Toggles.NoCD.Value then
+			local c = getChar()
+			if c then
+				local cd = c:FindFirstChild("Cooldowns")
+				if cd then
+					for _, x in ipairs(cd:GetChildren()) do
+						pcall(function()
+							x:Destroy()
+						end)
+					end
+				end
+			end
+		end
+	end
+end)
+
+local function getPart(o)
+	if not o then
+		return nil
+	end
+	if o:IsA("BasePart") then
+		return o
+	end
+	if o:IsA("Model") then
+		return o.PrimaryPart
+			or o:FindFirstChild("HumanoidRootPart")
+			or o:FindFirstChild("Torso")
+			or o:FindFirstChildWhichIsA("BasePart")
+	end
+end
+
+function getMobs(incComp)
+	local l, pn = {}, {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		pn[p.Name] = true
+	end
+	for _, o in ipairs(WS:GetChildren()) do
+		if o:IsA("Model") and not pn[o.Name] then
+			local h = o:FindFirstChildOfClass("Humanoid")
+			local r = o:FindFirstChild("HumanoidRootPart") or o:FindFirstChild("Torso")
+			if h and r and h.Health > 0 then
+				local ic = o:FindFirstChild("AlliedSummon") or o:FindFirstChild("OwnerTag")
+				if incComp or not ic then
+					table.insert(
+						l,
+						{ Obj = o, Name = o.Name, Hum = h, Part = r, Pos = r.Position, MaxHp = h.MaxHealth, IsComp = ic
+							~= nil }
+					)
+				end
+			end
+		end
+	end
+	return l
+end
+
+local function getMobNames()
+	local n, s = { "ALL" }, {}
+	for _, m in ipairs(getMobs(false)) do
+		if not s[m.Name] then
+			s[m.Name] = true
+			table.insert(n, m.Name)
+		end
+	end
+	table.sort(n, function(a, b)
+		if a == "ALL" then
+			return true
+		elseif b == "ALL" then
+			return false
+		end
+		return a < b
+	end)
+	return n
+end
+local function isBoss(m)
+	return m.MaxHp > 5000
+end
+local function getOres()
+	local l = {}
+	local m = WS:FindFirstChild("Map")
+	if not m then
+		return l
+	end
+	local o = m:FindFirstChild("Ores")
+	if not o then
+		return l
+	end
+	for _, ore in ipairs(o:GetChildren()) do
+		if ore:IsA("Model") then
+			local p = getPart(ore)
+			if p then
+				table.insert(l, { Obj = ore, Name = ore.Name, Part = p, Pos = p.Position })
+			end
+		end
+	end
+	return l
+end
+local function getOreTypes()
+	local n, s = { "ALL" }, {}
+	for _, o in ipairs(getOres()) do
+		if not s[o.Name] then
+			s[o.Name] = true
+			table.insert(n, o.Name)
+		end
+	end
+	return n
+end
+
+local function summonCompanion(toolName, method)
+	local tool = findToolByName(toolName)
+	if not tool then
+		return false
+	end
+	local c = getChar()
+	if not c then
+		return false
+	end
+	if tool.Parent ~= c then
+		tool.Parent = c
+		task.wait(0.05)
+	end
+	local charTool = c:FindFirstChild(toolName)
+	if not charTool then
+		return false
+	end
+	local rf = charTool:FindFirstChildOfClass("RemoteFunction")
+	if not rf then
+		return false
+	end
+	local hrp = getHRP()
+	local torso = getTorso()
+	if not hrp or not torso then
+		return false
+	end
+	pcall(function()
+		rf:InvokeServer(method, { hrp.Position, torso })
+	end)
+	return true
+end
+local function instantSummonAll()
+	local orig = getEquipped()
+	local count = 0
+	for name, method in pairs(SUMMON_MAP) do
+		if findToolByName(name) then
+			count = count + 1
+			task.spawn(function()
+				if type(method) == "table" then
+					for _, m in ipairs(method) do
+						summonCompanion(name, m)
+					end
+				else
+					summonCompanion(name, method)
+				end
+			end)
+		end
+	end
+	task.wait(0.5)
+	if orig and orig.Parent == LP.Backpack then
+		orig.Parent = getChar()
+	end
+	if count > 0 then
+		notify("Summoned " .. count, 2)
+	end
+end
+task.spawn(function()
+	while true do
+		task.wait(5)
+		if Toggles and Toggles.AutoSummon and Toggles.AutoSummon.Value then
+			instantSummonAll()
+		end
+	end
+end)
+
+local function equipAll()
+	local c = getChar()
+	if not c then
+		return
+	end
+	local count = 0
+	for _, tool in ipairs(LP.Backpack:GetChildren()) do
+		if tool:IsA("Tool") then
+			tool.Parent = c
+			count = count + 1
+			task.wait(0.05)
+		end
+	end
+	notify("Equipped " .. count, 2)
+end
+task.spawn(function()
+	local idx = 1
+	while true do
+		task.wait(0.3)
+		if Toggles and Toggles.CycleEquip and Toggles.CycleEquip.Value then
+			local tools = allTools()
+			if #tools > 0 then
+				idx = (idx % #tools) + 1
+				local t = tools[idx]
+				if t and t.Parent == LP.Backpack then
+					pcall(function()
+						t.Parent = getChar()
+					end)
+				end
+			end
+		end
+	end
+end)
+local function equipSpecific(name)
+	local tool = findToolByName(name)
+	if not tool then
+		notify("Not found", 2)
+		return
+	end
+	tool.Parent = getChar()
+	notify("Equipped: " .. name, 2)
+end
+local function findPlayerPortal()
+	local c = {}
+	local bases = WS:FindFirstChild("Bases")
+	if bases then
+		for _, base in ipairs(bases:GetChildren()) do
+			local objs = base:FindFirstChild("objects")
+			if objs then
+				for _, obj in ipairs(objs:GetChildren()) do
+					local n = obj.Name:lower()
+					if
+						n:find("dungeonteleporter")
+						or n:find("mysteryteleporter")
+						or n:find("beneath")
+						or n:find("void")
+					then
+						local part = obj:FindFirstChild("center") or obj:FindFirstChild("pad") or getPart(obj)
+						if part then
+							table.insert(c, { Name = obj.Name, Pos = part.Position, Base = base.Name })
+						end
+					end
+				end
+			end
+		end
+	end
+	return c
+end
+local function tpToMinePortal()
+	local c = findPlayerPortal()
+	if #c == 0 then
+		notify("No portal", 3)
+		return
+	end
+	local hrp = getHRP()
+	if not hrp then
+		return
+	end
+	table.sort(c, function(a, b)
+		return (hrp.Position - a.Pos).Magnitude < (hrp.Position - b.Pos).Magnitude
+	end)
+	hrp.CFrame = CFrame.new(c[1].Pos + Vector3.new(0, 3, 0))
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	notify("Portal: " .. c[1].Name, 2)
+end
+local function tpDungeon(sub)
+	local bases = WS:FindFirstChild("Bases")
+	if bases then
+		for _, base in ipairs(bases:GetChildren()) do
+			local objs = base:FindFirstChild("objects")
+			if objs then
+				for _, obj in ipairs(objs:GetChildren()) do
+					if obj:GetAttribute("SubplaceName") == sub then
+						local part = obj:FindFirstChild("center") or obj:FindFirstChild("pad") or getPart(obj)
+						if part then
+							local hrp = getHRP()
+							if hrp then
+								hrp.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+								hrp.AssemblyLinearVelocity = Vector3.zero
+							end
+							notify("TP " .. sub, 2)
+							return
+						end
+					end
+				end
+			end
+		end
+	end
+	notify("Not found: " .. sub, 3)
+end
+task.spawn(function()
+	while true do
+		task.wait(0.2)
+		if Toggles and Toggles.AutoAcceptTP and Toggles.AutoAcceptTP.Value then
+			local tg = LP.PlayerGui:FindFirstChild("TeleportGui")
+			if tg then
+				for _, f in ipairs({ tg:FindFirstChild("Frame"), tg:FindFirstChild("FrameReal") }) do
+					if f and f.Visible then
+						local rem = f:FindFirstChild("Remote")
+						if rem and rem.Value then
+							pcall(function()
+								rem.Value:InvokeServer()
+							end)
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+local function bringAllMobs(radius)
+	local hrp = getHRP()
+	if not hrp then
+		return
+	end
+	local count = 0
+	for _, m in ipairs(getMobs(false)) do
+		if (hrp.Position - m.Pos).Magnitude <= (radius or 500) then
+			pcall(function()
+				m.Part.CFrame = hrp.CFrame * CFrame.new(0, 0, -5)
+				m.Part.AssemblyLinearVelocity = Vector3.zero
+			end)
+			count = count + 1
+		end
+	end
+	notify("Brought " .. count, 2)
+end
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+		if Toggles and Toggles.BringMobsLoop and Toggles.BringMobsLoop.Value then
+			local hrp = getHRP()
+			if hrp then
+				for _, m in ipairs(getMobs(false)) do
+					if (hrp.Position - m.Pos).Magnitude <= 300 and m.Hum.Health > 0 then
+						pcall(function()
+							m.Part.CFrame = hrp.CFrame * CFrame.new(0, 0, -4)
+							m.Part.AssemblyLinearVelocity = Vector3.zero
+						end)
+					end
+				end
+			end
+		end
+	end
+end)
+
+local function realInstakillMob(mob)
+	if not mob or not mob.Obj or not mob.Hum or mob.Hum.Health <= 0 then
+		return
+	end
+	task.spawn(function()
+		pcall(function()
+			local arm = mob.Obj:FindFirstChild("Armored")
+			if arm then
+				arm.Value = 0
+			end
+		end)
+		for i = 1, 30 do
+			if not mob.Obj.Parent or mob.Hum.Health <= 0 then
+				break
+			end
+			attackWithAllWeapons(mob)
+			task.wait(0.1)
+		end
+	end)
+end
+local function killAllInMap()
+	task.spawn(function()
+		local mobs = getMobs(false)
+		for _, m in ipairs(mobs) do
+			if m.Obj and m.Obj.Parent and m.Hum.Health > 0 then
+				realInstakillMob(m)
+			end
+		end
+		notify("Killing " .. #mobs, 3)
+	end)
+end
+local function instakillAllInRadius(radius)
+	local hrp = getHRP()
+	if not hrp then
+		return 0
+	end
+	local killed = 0
+	for _, m in ipairs(getMobs(false)) do
+		if (hrp.Position - m.Pos).Magnitude <= (radius or 1000) and m.Hum.Health > 0 then
+			realInstakillMob(m)
+			killed = killed + 1
+		end
+	end
+	return killed
+end
+local function bossHunt()
+	task.spawn(function()
+		local bs = {}
+		for _, m in ipairs(getMobs(false)) do
+			if isBoss(m) then
+				table.insert(bs, m)
+			end
+		end
+		if #bs == 0 then
+			notify("No bosses", 2)
+			return
+		end
+		table.sort(bs, function(a, b)
+			return a.MaxHp > b.MaxHp
+		end)
+		notify("→ " .. bs[1].Name, 3)
+		realInstakillMob(bs[1])
+	end)
+end
+
+task.spawn(function()
+	while true do
+		local interval = (Options and Options.AutoIKSpeed and Options.AutoIKSpeed.Value) or 0.1
+		task.wait(interval)
+		if Toggles and Toggles.AutoInstakill and Toggles.AutoInstakill.Value then
+			local hrp = getHRP()
+			if hrp then
+				local radius = (Options and Options.AutoIKRadius and Options.AutoIKRadius.Value) or 500
+				for _, m in ipairs(getMobs(false)) do
+					if (hrp.Position - m.Pos).Magnitude <= radius and m.Hum.Health > 0 then
+						task.spawn(function()
+							attackWithAllWeapons(m)
+						end)
+					end
+				end
+			end
+		end
+	end
+end)
+task.spawn(function()
+	while true do
+		task.wait(0.03)
+		if
+			Toggles
+			and Toggles.AutoInstakill
+			and Toggles.AutoInstakill.Value
+			and Toggles.AutoIKAggressive
+			and Toggles.AutoIKAggressive.Value
+		then
+			local hrp = getHRP()
+			if hrp then
+				local radius = (Options and Options.AutoIKRadius and Options.AutoIKRadius.Value) or 500
+				for _, m in ipairs(getMobs(false)) do
+					if (hrp.Position - m.Pos).Magnitude <= radius and m.Hum.Health > 0 then
+						task.spawn(function()
+							attackWithAllWeapons(m)
+						end)
+					end
+				end
+			end
+		end
+	end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(0.12)
+		if Toggles and Toggles.AutoM1 and Toggles.AutoM1.Value then
+			pcall(function()
+				VI:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+				task.wait(0.02)
+				VI:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+			end)
+		end
+	end
+end)
+task.spawn(function()
+	while true do
+		task.wait(0.15)
+		if Toggles and Toggles.AutoAtk and Toggles.AutoAtk.Value then
+			local hrp = getHRP()
+			if hrp then
+				local n, dd = nil, math.huge
+				for _, m in ipairs(getMobs(false)) do
+					local d = (hrp.Position - m.Pos).Magnitude
+					if d < dd and m.Hum.Health > 0 then
+						dd = d
+						n = m
+					end
+				end
+				if n and dd < 500 then
+					local tool = getEquipped()
+					if tool then
+						realWeaponAttack(tool, n)
+					end
+				end
+			end
+		end
+	end
+end)
+
+local mfTarget = nil
+RunService.Heartbeat:Connect(function()
+	if not (Toggles and Toggles.MobFarm and Toggles.MobFarm.Value and Toggles.MFTP and Toggles.MFTP.Value) then
+		return
+	end
+	if not mfTarget or not mfTarget.Obj or not mfTarget.Obj.Parent or not mfTarget.Hum or mfTarget.Hum.Health <= 0 then
+		return
+	end
+	local hrp = getHRP()
+	if not hrp then
+		return
+	end
+	local part = mfTarget.Part
+	if not part or not part.Parent then
+		return
+	end
+	pcall(function()
+		hrp.CFrame = CFrame.lookAt(part.Position + Vector3.new(0, 12, 0), part.Position)
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+	end)
+end)
+
+local function mobFarmLoop()
+	task.spawn(function()
+		while Toggles and Toggles.MobFarm and Toggles.MobFarm.Value do
+			local mobs = getMobs(false)
+			local f = {}
+			local t = (Options and Options.MobT and Options.MobT.Value) or "ALL"
+			local bo = Toggles and Toggles.BossOnly and Toggles.BossOnly.Value
+			for _, m in ipairs(mobs) do
+				if not (bo and not isBoss(m)) then
+					if t == "ALL" or m.Name == t then
+						table.insert(f, m)
+					end
+				end
+			end
+			local hrp = getHRP()
+			if hrp then
+				table.sort(f, function(a, b)
+					return (hrp.Position - a.Pos).Magnitude < (hrp.Position - b.Pos).Magnitude
+				end)
+			end
+			local m = f[1]
+			if m then
+				mfTarget = m
+				local start = tick()
+				while
+					Toggles.MobFarm
+					and Toggles.MobFarm.Value
+					and m.Obj
+					and m.Obj.Parent
+					and m.Hum
+					and m.Hum.Health > 0
+				do
+					attackWithAllWeapons(m)
+					task.wait(0.15)
+					if tick() - start > 60 then
+						break
+					end
+				end
+				mfTarget = nil
+			end
+			task.wait(0.2)
+		end
+		mfTarget = nil
+	end)
+end
+
+local savedPos = nil
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if Toggles and Toggles.AntiDeath and Toggles.AntiDeath.Value then
+			local h = getHRP()
+			if h then
+				savedPos = h.CFrame
+			end
+		end
+	end
+end)
+LP.CharacterAdded:Connect(function(c)
+	if Toggles and Toggles.AntiDeath and Toggles.AntiDeath.Value and savedPos then
+		task.wait(1.5)
+		local h = c:WaitForChild("HumanoidRootPart", 5)
+		if h then
+			h.CFrame = savedPos
+		end
+	end
+	if Toggles and Toggles.AutoSummon and Toggles.AutoSummon.Value then
+		task.wait(3)
+		instantSummonAll()
+	end
+end)
+task.spawn(function()
+	while true do
+		task.wait(0.3)
+		if Toggles and Toggles.AntiFall and Toggles.AntiFall.Value then
+			local hrp = getHRP()
+			local h = getHum()
+			if hrp and h and h:GetState() == Enum.HumanoidStateType.Freefall then
+				local r = WS:Raycast(hrp.Position, Vector3.new(0, -500, 0))
+				if r then
+					hrp.CFrame = CFrame.new(r.Position + Vector3.new(0, 5, 0))
+					hrp.AssemblyLinearVelocity = Vector3.zero
+				end
+			end
+		end
+	end
+end)
+task.spawn(function()
+	while true do
+		task.wait(0.1)
+		if Toggles and Toggles.SpeedOn and Toggles.SpeedOn.Value then
+			local h = getHum()
+			if h then
+				pcall(function()
+					h.WalkSpeed = (Options and Options.WS and Options.WS.Value) or 24
+				end)
+			end
+		end
+		if Toggles and Toggles.JumpOn and Toggles.JumpOn.Value then
+			local h = getHum()
+			if h then
+				pcall(function()
+					h.UseJumpPower = true
+					h.JumpPower = (Options and Options.JP and Options.JP.Value) or 50
+				end)
+			end
+		end
+	end
+end)
+task.spawn(function()
+	while true do
+		task.wait(1)
+		if Toggles and Toggles.NoFog and Toggles.NoFog.Value then
+			Lighting.FogEnd = 100000
+			Lighting.FogStart = 100000
+			for _, at in ipairs(Lighting:GetChildren()) do
+				if at:IsA("Atmosphere") then
+					pcall(function()
+						at.Density = 0
+						at.Haze = 0
+					end)
+				end
+			end
+		end
+		if Toggles and Toggles.FullBright and Toggles.FullBright.Value then
+			Lighting.Brightness = 3
+			Lighting.ClockTime = 14
+			Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+			Lighting.Ambient = Color3.new(1, 1, 1)
+			Lighting.GlobalShadows = false
+		end
+		if Toggles and Toggles.MaxZoom and Toggles.MaxZoom.Value then
+			LP.CameraMaxZoomDistance = 10000
+			LP.CameraMinZoomDistance = 0.5
+		end
+	end
+end)
+
+LP.Idled:Connect(function()
+	if Toggles and Toggles.AntiAFK and Toggles.AntiAFK.Value then
+		pcall(function()
+			local vu = game:GetService("VirtualUser")
+			vu:CaptureController()
+			vu:ClickButton2(Vector2.new())
+		end)
+	end
+end)
+game:GetService("GuiService").ErrorMessageChanged:Connect(function()
+	if Toggles and Toggles.AutoRejoin and Toggles.AutoRejoin.Value then
+		task.wait(3)
+		pcall(function()
+			TS:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+		end)
+	end
+end)
+
+local flyBV, flyBG, flyC
+local function stopFly()
+	if flyBV then
+		flyBV:Destroy()
+		flyBV = nil
+	end
+	if flyBG then
+		flyBG:Destroy()
+		flyBG = nil
+	end
+	if flyC then
+		flyC:Disconnect()
+		flyC = nil
+	end
+end
+local function startFly()
+	stopFly()
+	local hrp = getHRP()
+	if not hrp then
+		return
+	end
+	flyBV = Instance.new("BodyVelocity", hrp)
+	flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+	flyBV.Velocity = Vector3.zero
+	flyBG = Instance.new("BodyGyro", hrp)
+	flyBG.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+	flyBG.P = 9e4
+	flyC = RunService.RenderStepped:Connect(function()
+		local h = getHRP()
+		local cam = WS.CurrentCamera
+		if not h or not cam or not flyBV then
+			return
+		end
+		local d = Vector3.zero
+		if UIS:IsKeyDown(Enum.KeyCode.W) then
+			d = d + cam.CFrame.LookVector
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.S) then
+			d = d - cam.CFrame.LookVector
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.A) then
+			d = d - cam.CFrame.RightVector
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.D) then
+			d = d + cam.CFrame.RightVector
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.Space) then
+			d = d + Vector3.new(0, 1, 0)
+		end
+		if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then
+			d = d - Vector3.new(0, 1, 0)
+		end
+		flyBV.Velocity = d * ((Options and Options.FS and Options.FS.Value) or 60)
+		flyBG.CFrame = cam.CFrame
+	end)
+end
+local ijC
+local function startIJ()
+	if ijC then
+		return
+	end
+	ijC = UIS.JumpRequest:Connect(function()
+		if Toggles and Toggles.InfJump and Toggles.InfJump.Value then
+			local h = getHum()
+			if h then
+				h:ChangeState(Enum.HumanoidStateType.Jumping)
+			end
+		end
+	end)
+end
+local function stopIJ()
+	if ijC then
+		ijC:Disconnect()
+		ijC = nil
+	end
+end
+local nc
+local function startNC()
+	if nc then
+		return
+	end
+	nc = RunService.Stepped:Connect(function()
+		if Toggles and Toggles.NoClip and Toggles.NoClip.Value then
+			local c = getChar()
+			if c then
+				for _, p in ipairs(c:GetDescendants()) do
+					if p:IsA("BasePart") then
+						p.CanCollide = false
+					end
+				end
+			end
+		end
+	end)
+end
+local function stopNC()
+	if nc then
+		nc:Disconnect()
+		nc = nil
+	end
+end
+local function freeze(s)
+	local h = getHRP()
+	if h then
+		pcall(function()
+			h.Anchored = s
+			if s then
+				h.AssemblyLinearVelocity = Vector3.zero
+			end
+		end)
+	end
+end
+
+local espO = {}
+local function clearESP()
+	for _, e in ipairs(espO) do
+		pcall(function()
+			e:Destroy()
+		end)
+	end
+	espO = {}
+end
+local function mkESP(p, o)
+	if not p or not p.Parent then
+		return
+	end
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.new(0, 220, 0, 50)
+	bb.AlwaysOnTop = true
+	bb.StudsOffset = Vector3.new(0, 3, 0)
+	bb.Adornee = p
+	bb.Parent = p
+	local t = Instance.new("TextLabel", bb)
+	t.Size = UDim2.new(1, 0, 1, 0)
+	t.BackgroundTransparency = 1
+	t.Font = Enum.Font.GothamBold
+	t.TextSize = 13
+	t.TextStrokeTransparency = 0
+	t.TextColor3 = o.color or Color3.new(1, 1, 1)
+	t.Text = o.text
+	table.insert(espO, bb)
+	local hl = Instance.new("Highlight")
+	hl.FillColor = o.color
+	hl.FillTransparency = 0.6
+	hl.OutlineColor = o.color
+	hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	hl.Adornee = p.Parent
+	hl.Parent = p
+	table.insert(espO, hl)
+end
+
+task.spawn(function()
+	while true do
+		task.wait(1)
+		clearESP()
+		local hrp = getHRP()
+		if not hrp then
+			continue
+		end
+		local d = (Toggles and Toggles.UnlimitedRange and Toggles.UnlimitedRange.Value) and math.huge
+			or ((Options and Options.ESPD and Options.ESPD.Value) or 5000)
+		if Toggles and Toggles.MobESP and Toggles.MobESP.Value then
+			for _, m in ipairs(getMobs(false)) do
+				local dst = (hrp.Position - m.Pos).Magnitude
+				if dst <= d then
+					mkESP(
+						m.Part,
+						{
+							text = (isBoss(m) and "👑 " or "💀 ")
+								.. m.Name
+								.. "\n"
+								.. math.floor(m.Hum.Health)
+								.. "/"
+								.. math.floor(m.MaxHp)
+								.. " ["
+								.. math.floor(dst)
+								.. "m]",
+							color = isBoss(m) and Color3.fromRGB(255, 20, 20) or Color3.fromRGB(255, 100, 100),
+						}
+					)
+				end
+			end
+		end
+		if Toggles and Toggles.CompESP and Toggles.CompESP.Value then
+			for _, m in ipairs(getMobs(true)) do
+				if m.IsComp then
+					local dst = (hrp.Position - m.Pos).Magnitude
+					if dst <= d then
+						mkESP(
+							m.Part,
+							{ text = "🐾 " .. m.Name .. "\n" .. math.floor(m.Hum.Health), color = Color3.fromRGB(
+								100,
+								255,
+								150
+							) }
+						)
+					end
+				end
+			end
+		end
+		if Toggles and Toggles.OreESP and Toggles.OreESP.Value then
+			for _, o in ipairs(getOres()) do
+				local dst = (hrp.Position - o.Pos).Magnitude
+				if dst <= d then
+					mkESP(
+						o.Part,
+						{ text = "⛏ " .. o.Name .. " [" .. math.floor(dst) .. "m]", color = Color3.fromRGB(
+							200,
+							200,
+							100
+						) }
+					)
+				end
+			end
+		end
+		if Toggles and Toggles.PlrESP and Toggles.PlrESP.Value then
+			for _, p in ipairs(Players:GetPlayers()) do
+				if p ~= LP and p.Character then
+					local pr = p.Character:FindFirstChild("HumanoidRootPart")
+					local h = p.Character:FindFirstChildOfClass("Humanoid")
+					if pr and h then
+						local dst = (hrp.Position - pr.Position).Magnitude
+						if dst <= d then
+							mkESP(
+								pr,
+								{ text = "👤 " .. p.Name .. "\n" .. math.floor(h.Health), color = Color3.fromRGB(
+									100,
+									200,
+									255
+								) }
+							)
+						end
+					end
+				end
+			end
+		end
+	end
+end)
+
+local function tpA(pos, y)
+	local h = getHRP()
+	if h then
+		h.CFrame = CFrame.new(pos + Vector3.new(0, y or 4, 0))
+		h.AssemblyLinearVelocity = Vector3.zero
+	end
+end
+local function rmParticles()
+	for _, d in ipairs(WS:GetDescendants()) do
+		if
+			d:IsA("ParticleEmitter")
+			or d:IsA("Trail")
+			or d:IsA("Beam")
+			or d:IsA("Smoke")
+			or d:IsA("Fire")
+			or d:IsA("Sparkles")
+		then
+			pcall(function()
+				d.Enabled = false
+			end)
+		end
+	end
+	notify("Particles off", 2)
+end
+local function fpsBoost()
+	for _, d in ipairs(WS:GetDescendants()) do
+		if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Beam") then
+			pcall(function()
+				d.Enabled = false
+			end)
+		elseif d:IsA("MeshPart") or d:IsA("Part") then
+			pcall(function()
+				d.Material = Enum.Material.Plastic
+			end)
+		elseif d:IsA("Decal") or d:IsA("Texture") then
+			pcall(function()
+				d.Transparency = 1
+			end)
+		end
+	end
+	Lighting.GlobalShadows = false
+	Lighting.FogEnd = 1e9
+	notify("FPS boost", 2)
+end
+local function srvHop()
+	notify("Search...", 2)
+	local good = {}
+	pcall(function()
+		local body = game:HttpGet(
+			"https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"
+		)
+		local data = HTTP:JSONDecode(body)
+		if data and data.data then
+			for _, s in ipairs(data.data) do
+				if (s.playing or 0) < (s.maxPlayers or 0) and s.id ~= game.JobId then
+					table.insert(good, s)
+				end
+			end
+		end
+	end)
+	if #good == 0 then
+		notify("None", 2)
+		return
+	end
+	pcall(function()
+		TS:TeleportToPlaceInstance(game.PlaceId, good[math.random(1, #good)].id, LP)
+	end)
+end
+local function oreLoop()
+	task.spawn(function()
+		while Toggles and Toggles.OreFarm and Toggles.OreFarm.Value do
+			local ores = getOres()
+			local hrp = getHRP()
+			if hrp then
+				local f = {}
+				local t = (Options and Options.OreT and Options.OreT.Value) or "ALL"
+				for _, o in ipairs(ores) do
+					if t == "ALL" or o.Name == t then
+						table.insert(f, o)
+					end
+				end
+				table.sort(f, function(a, b)
+					return (hrp.Position - a.Pos).Magnitude < (hrp.Position - b.Pos).Magnitude
+				end)
+				local ore = f[1]
+				if ore and ore.Obj and ore.Obj.Parent then
+					local eq = getEquipped()
+					if not eq or not eq.Name:lower():find("pick") then
+						for _, x in ipairs(LP.Backpack:GetChildren()) do
+							if x:IsA("Tool") and x.Name:lower():find("pick") then
+								x.Parent = LP.Character
+								task.wait(0.2)
+								break
+							end
+						end
+					end
+					local mp = ore.Pos + Vector3.new(0, 3, 5)
+					local s = tick()
+					while Toggles.OreFarm.Value and ore.Obj and ore.Obj.Parent and tick() - s < 8 do
+						local h = getHRP()
+						if h then
+							h.CFrame = CFrame.lookAt(mp, ore.Pos)
+							h.AssemblyLinearVelocity = Vector3.zero
+						end
+						pcall(function()
+							VI:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+							task.wait(0.05)
+							VI:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+						end)
+						attackWithAllWeapons()
+						task.wait(0.15)
+					end
+				else
+					task.wait(0.5)
+				end
+			else
+				task.wait(0.3)
+			end
+		end
+	end)
+end
+
+UIS.InputBegan:Connect(function(i, g)
+	if g then
+		return
+	end
+	if i.KeyCode == Enum.KeyCode.T and Toggles and Toggles.Freeze then
+		Toggles.Freeze:SetValue(true)
+	end
+	if i.KeyCode == Enum.KeyCode.Y and Toggles and Toggles.Freeze then
+		Toggles.Freeze:SetValue(false)
+	end
+end)
+
+local Window = Library:CreateWindow({
+	Title = "BCW Hub v19 | RCtrl",
+	Center = true,
+	AutoShow = true,
+	TabPadding = 4,
+	MenuFadeTime = 0.2,
+	Size = UDim2.fromOffset(500, 500),
+})
+local Tabs = {
+	Main = Window:AddTab("Main"),
+	Combat = Window:AddTab("Combat"),
+	Comps = Window:AddTab("Summon"),
+	Equip = Window:AddTab("Equip"),
+	Farm = Window:AddTab("Farm"),
+	Dgn = Window:AddTab("Dgn"),
+	ESP = Window:AddTab("ESP"),
+	Move = Window:AddTab("Move"),
+	TP = Window:AddTab("TP"),
+	Settings = Window:AddTab("UI"),
+}
+
+local M1 = Tabs.Main:AddLeftGroupbox("Mob Farm")
+M1:AddToggle("MobFarm", { Text = "Enabled" }):OnChanged(function()
+	if Toggles.MobFarm.Value then
+		mobFarmLoop()
+	end
+end)
+M1:AddToggle("MFTP", { Text = "Hover Above" })
+M1:AddToggle("BossOnly", { Text = "Boss Only" })
+M1:AddDropdown("MobT", { Text = "Target", Default = "ALL", Values = { "ALL" } })
+M1:AddButton({
+	Text = "Refresh",
+	Func = function()
+		Options.MobT:SetValues(getMobNames())
+		Options.MobT:SetValue("ALL")
+	end,
+})
+M1:AddDivider()
+M1:AddToggle("BringMobsLoop", { Text = "Bring Mobs" })
+M1:AddButton({
+	Text = "Bring All",
+	Func = function()
+		bringAllMobs(1000)
+	end,
+})
+
+local M2 = Tabs.Main:AddLeftGroupbox("Protection")
+M2:AddToggle("AntiDeath", { Text = "Anti-Death" })
+M2:AddToggle("AntiFall", { Text = "Anti-Fall" })
+M2:AddToggle("AntiAFK", { Text = "Anti-AFK", Default = true })
+M2:AddToggle("AutoRejoin", { Text = "Auto Rejoin", Default = true })
+
+local M3 = Tabs.Main:AddRightGroupbox("Actions")
+M3:AddButton({ Text = "KILL ALL", Func = killAllInMap })
+M3:AddButton({ Text = "Hunt Boss", Func = bossHunt })
+M3:AddButton({
+	Text = "Instakill 500m",
+	Func = function()
+		notify("Killing " .. instakillAllInRadius(500), 2)
+	end,
+})
+M3:AddButton({ Text = "Ability Spam", Func = abilitySpam })
+M3:AddButton({ Text = "Rm Particles", Func = rmParticles })
+M3:AddButton({ Text = "FPS Boost", Func = fpsBoost })
+M3:AddButton({ Text = "Server Hop", Func = srvHop })
+
+local C1 = Tabs.Combat:AddLeftGroupbox("⚔ Kill Aura")
+C1:AddToggle("KillAura", { Text = "⚔ KILL AURA" })
+C1:AddToggle("KillAuraAggressive", { Text = "🚀 AGGRESSIVE" })
+C1:AddSlider("KAR", { Text = "Radius", Default = 100, Min = 10, Max = 1000, Rounding = 0 })
+C1:AddSlider("KASpeed", { Text = "Speed", Default = 0.05, Min = 0.01, Max = 0.5, Rounding = 2 })
+C1:AddLabel("Экипированное оружие")
+
+local C1B = Tabs.Combat:AddLeftGroupbox("🔫 Trepid Shoot")
+C1B:AddToggle("TrepidSpam", { Text = "🔫 TREPID SHOOT" })
+C1B:AddToggle("TrepidAggressive", { Text = "🚀 AGGRESSIVE" })
+C1B:AddSlider("TrepidSpeed", { Text = "Speed", Default = 0.05, Min = 0.01, Max = 0.5, Rounding = 2 })
+C1B:AddSlider("TrepidRadius", { Text = "Radius", Default = 500, Min = 50, Max = 5000, Rounding = 0 })
+C1B:AddLabel("shoot() по ВСЕМ мобам")
+
+local C2 = Tabs.Combat:AddRightGroupbox("Auto Instakill")
+C2:AddToggle("AutoInstakill", { Text = "AUTO INSTAKILL" })
+C2:AddToggle("AutoIKAggressive", { Text = "🚀 AGGRESSIVE" })
+C2:AddSlider("AutoIKSpeed", { Text = "Speed", Default = 0.1, Min = 0.05, Max = 1, Rounding = 2 })
+C2:AddSlider("AutoIKRadius", { Text = "Radius", Default = 500, Min = 50, Max = 5000, Rounding = 0 })
+
+local C3 = Tabs.Combat:AddRightGroupbox("Other")
+C3:AddToggle("AutoAtk", { Text = "Auto Attack" })
+C3:AddToggle("AutoM1", { Text = "Auto M1" })
+C3:AddButton({ Text = "Kill All", Func = killAllInMap })
+C3:AddButton({ Text = "Hunt Boss", Func = bossHunt })
+C3:AddButton({ Text = "Ability Spam", Func = abilitySpam })
+C3:AddLabel("T/Y=Freeze")
+
+local S1 = Tabs.Comps:AddLeftGroupbox("Summon")
+S1:AddToggle("AutoSummon", { Text = "Auto Loop (5s)" })
+S1:AddButton({ Text = "INSTANT Summon ALL", Func = instantSummonAll })
+S1:AddButton({
+	Text = "Check Items",
+	Func = function()
+		local l = {}
+		for n, _ in pairs(SUMMON_MAP) do
+			if findToolByName(n) then
+				table.insert(l, n)
+			end
+		end
+		if #l == 0 then
+			notify("None", 3)
+			return
+		end
+		notify(table.concat(l, ", "), 6)
+	end,
+})
+S1:AddToggle("CompESP", { Text = "Companion ESP" })
+local S2 = Tabs.Comps:AddRightGroupbox("Individual")
+for n, _ in pairs(SUMMON_MAP) do
+	S2:AddButton({
+		Text = n,
+		Func = function()
+			local method = SUMMON_MAP[n]
+			if type(method) == "table" then
+				for _, m in ipairs(method) do
+					summonCompanion(n, m)
+					task.wait(0.05)
+				end
+			else
+				summonCompanion(n, method)
+			end
+			notify(n, 2)
+		end,
+	})
+end
+
+local E1 = Tabs.Equip:AddLeftGroupbox("Equip")
+E1:AddButton({ Text = "Equip ALL", Func = equipAll })
+E1:AddToggle("CycleEquip", { Text = "Cycle Loop" })
+local E2 = Tabs.Equip:AddRightGroupbox("Select")
+E2:AddDropdown("EquipItem", { Text = "Item", Default = "", Values = { "" } })
+E2:AddButton({
+	Text = "Refresh",
+	Func = function()
+		local n = getAllToolNames()
+		if #n > 0 then
+			Options.EquipItem:SetValues(n)
+			Options.EquipItem:SetValue(n[1])
+		end
+	end,
+})
+E2:AddButton({
+	Text = "Equip",
+	Func = function()
+		equipSpecific(Options.EquipItem.Value)
+	end,
+})
+
+local F1 = Tabs.Farm:AddLeftGroupbox("Ore Farm")
+F1:AddToggle("OreFarm", { Text = "Enabled" }):OnChanged(function()
+	if Toggles.OreFarm.Value then
+		oreLoop()
+	end
+end)
+F1:AddDropdown("OreT", { Text = "Type", Default = "ALL", Values = { "ALL" } })
+F1:AddButton({
+	Text = "Refresh",
+	Func = function()
+		Options.OreT:SetValues(getOreTypes())
+		Options.OreT:SetValue("ALL")
+	end,
+})
+
+local D1 = Tabs.Dgn:AddLeftGroupbox("Dungeons")
+D1:AddToggle("AutoAcceptTP", { Text = "Auto YES", Default = true })
+D1:AddDivider()
+for _, d in ipairs(DUNGEONS) do
+	D1:AddButton({
+		Text = d[1],
+		Func = function()
+			tpDungeon(d[2])
+		end,
+	})
+end
+local D2 = Tabs.Dgn:AddRightGroupbox("Portal")
+D2:AddButton({ Text = "TP to Portal", Func = tpToMinePortal })
+D2:AddButton({
+	Text = "Find Portals",
+	Func = function()
+		local c = findPlayerPortal()
+		if #c == 0 then
+			notify("None", 2)
+			return
+		end
+		local n = {}
+		for _, p in ipairs(c) do
+			table.insert(n, p.Name .. " @ " .. p.Base)
+		end
+		notify(table.concat(n, "\n"), 5)
+	end,
+})
+
+local V1 = Tabs.ESP:AddLeftGroupbox("ESP")
+V1:AddToggle("MobESP", { Text = "Mob/Boss" })
+V1:AddToggle("OreESP", { Text = "Ore" })
+V1:AddToggle("PlrESP", { Text = "Player" })
+V1:AddToggle("UnlimitedRange", { Text = "UNLIMITED" })
+V1:AddSlider("ESPD", { Text = "Distance", Default = 5000, Min = 100, Max = 10000, Rounding = 0 })
+local V2 = Tabs.ESP:AddRightGroupbox("Visual")
+V2:AddToggle("NoFog", { Text = "No Fog" })
+V2:AddToggle("FullBright", { Text = "Full Bright" })
+V2:AddToggle("MaxZoom", { Text = "Max Zoom" })
+
+local MV1 = Tabs.Move:AddLeftGroupbox("Movement")
+MV1:AddToggle("SpeedOn", { Text = "Speed" })
+MV1:AddSlider("WS", { Text = "WalkSpeed", Default = 24, Min = 16, Max = 500, Rounding = 0 })
+MV1:AddToggle("JumpOn", { Text = "Jump" })
+MV1:AddSlider("JP", { Text = "JumpPower", Default = 50, Min = 50, Max = 500, Rounding = 0 })
+MV1:AddToggle("InfJump", { Text = "Inf Jump" }):OnChanged(function()
+	if Toggles.InfJump.Value then
+		startIJ()
+	else
+		stopIJ()
+	end
+end)
+MV1:AddToggle("NoClip", { Text = "NoClip" }):OnChanged(function()
+	if Toggles.NoClip.Value then
+		startNC()
+	else
+		stopNC()
+	end
+end)
+MV1:AddToggle("Freeze", { Text = "Freeze" }):OnChanged(function()
+	freeze(Toggles.Freeze.Value)
+end)
+MV1:AddToggle("FpsCounter", { Text = "FPS Counter" })
+local MV2 = Tabs.Move:AddRightGroupbox("Fly")
+MV2:AddToggle("FlyEnabled", { Text = "Fly" }):OnChanged(function()
+	if Toggles.FlyEnabled.Value then
+		startFly()
+	else
+		stopFly()
+	end
+end)
+MV2:AddSlider("FS", { Text = "Fly Speed", Default = 60, Min = 10, Max = 500, Rounding = 0 })
+MV2:AddLabel("WASD+Space/Shift")
+
+local T1 = Tabs.TP:AddLeftGroupbox("Bases")
+T1:AddDropdown("BT", { Text = "Base", Default = "", Values = { "" } })
+T1:AddButton({
+	Text = "Refresh",
+	Func = function()
+		local n = {}
+		local b = WS:FindFirstChild("Bases")
+		if b then
+			for _, x in ipairs(b:GetChildren()) do
+				local o = x:FindFirstChild("owner")
+				table.insert(n, x.Name .. " (" .. ((o and o.Value and o.Value.Name) or "None") .. ")")
+			end
+		end
+		if #n > 0 then
+			Options.BT:SetValues(n)
+			Options.BT:SetValue(n[1])
+		end
+	end,
+})
+T1:AddButton({
+	Text = "TP",
+	Func = function()
+		local s = Options.BT.Value
+		local b = WS:FindFirstChild("Bases")
+		if b then
+			for _, x in ipairs(b:GetChildren()) do
+				local o = x:FindFirstChild("owner")
+				local n = x.Name .. " (" .. ((o and o.Value and o.Value.Name) or "None") .. ")"
+				if n == s then
+					local sp = x:FindFirstChild("spawn")
+					if sp then
+						tpA(sp.Position, 5)
+					end
+					break
+				end
+			end
+		end
+	end,
+})
+local T2 = Tabs.TP:AddRightGroupbox("Players")
+T2:AddDropdown("PT", { Text = "Player", Default = "", Values = { "" } })
+T2:AddButton({
+	Text = "Refresh",
+	Func = function()
+		local n = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP then
+				table.insert(n, p.Name)
+			end
+		end
+		if #n > 0 then
+			Options.PT:SetValues(n)
+			Options.PT:SetValue(n[1])
+		end
+	end,
+})
+T2:AddButton({
+	Text = "TP",
+	Func = function()
+		local p = Players:FindFirstChild(Options.PT.Value)
+		if p and p.Character then
+			local pr = p.Character:FindFirstChild("HumanoidRootPart")
+			if pr then
+				tpA(pr.Position, 3)
+			end
+		end
+	end,
+})
+
+local fps = Instance.new("ScreenGui")
+fps.Name = "BCWFps"
+fps.ResetOnSpawn = false
+pcall(function()
+	fps.Parent = game:GetService("CoreGui")
+end)
+if not fps.Parent then
+	fps.Parent = LP.PlayerGui
+end
+local lbl = Instance.new("TextLabel", fps)
+lbl.Size = UDim2.new(0, 100, 0, 25)
+lbl.Position = UDim2.new(0, 10, 0, 40)
+lbl.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+lbl.BackgroundTransparency = 0.4
+lbl.TextColor3 = Color3.fromRGB(0, 255, 0)
+lbl.Font = Enum.Font.GothamBold
+lbl.TextSize = 14
+lbl.Text = "FPS: --"
+local fr, lt = 0, tick()
+RunService.RenderStepped:Connect(function()
+	fr = fr + 1
+	if tick() - lt >= 1 then
+		lbl.Text = "FPS: " .. fr
+		fr = 0
+		lt = tick()
+	end
+	lbl.Visible = Toggles and Toggles.FpsCounter and Toggles.FpsCounter.Value or false
+end)
+
+Library.ToggleKeybind = Options.MenuKeybind
+ThemeManager:SetLibrary(Library)
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ "MenuKeybind" })
+ThemeManager:SetFolder("BCWHub")
+SaveManager:SetFolder("BCWHub")
+SaveManager:BuildConfigSection(Tabs.Settings)
+ThemeManager:ApplyToTab(Tabs.Settings)
+pcall(function()
+	if not isfile or not isfile("BCWHub/themes/default.json") then
+		ThemeManager:ApplyTheme("Quartz")
+	else
+		SaveManager:LoadAutoloadConfig()
+	end
+end)
+if Options.MenuKeybind then
+	Options.MenuKeybind:SetValue("RightControl")
+end
+
+task.wait(0.3)
+pcall(function()
+	Options.MobT:SetValues(getMobNames())
+end)
+pcall(function()
+	Options.OreT:SetValues(getOreTypes())
+end)
+pcall(function()
+	Options.EquipItem:SetValues(getAllToolNames())
+end)
+
+notify("BCW Hub v19 loaded", 3)
+notify("🔫 Trepid Multi-Target Shoot!", 4)
